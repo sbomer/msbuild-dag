@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\MSBuild.Dag.Core\MSBuild.Dag.Core.csproj" />
+    <ProjectReference Include="..\..\src\MSBuild.Dag.Execution\MSBuild.Dag.Execution.csproj" />
     <ProjectReference Include="..\..\src\MSBuild.Dag.MSBuild\MSBuild.Dag.MSBuild.csproj" />
   </ItemGroup>
 

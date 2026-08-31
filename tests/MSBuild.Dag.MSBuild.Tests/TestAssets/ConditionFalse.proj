@@ -1,6 +1,6 @@
 <Project>
   <PropertyGroup>
-    <RunBuild>true</RunBuild>
+    <RunBuild>false</RunBuild>
   </PropertyGroup>
 
   <Target Name="Build"
