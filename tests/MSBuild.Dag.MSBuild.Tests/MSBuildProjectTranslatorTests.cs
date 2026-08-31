@@ -34,4 +34,18 @@ public sealed class MSBuildProjectTranslatorTests
             itemConstants,
             operation => operation.Content.SequenceEqual(["Program.cs"]));
     }
+
+    [Fact]
+    public void LoadsSdkStyleProjectBeforeReportingUnsupportedSemantics()
+    {
+        var projectPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "TestAssets",
+            "SdkStyle.csproj");
+
+        var exception = Assert.Throws<NotSupportedException>(
+            () => new MSBuildProjectTranslator().Translate(projectPath, "Build"));
+
+        Assert.Contains("Target conditions", exception.Message);
+    }
 }
