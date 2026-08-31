@@ -1,0 +1,17 @@
+<Project>
+  <Target Name="Build">
+    <PropertyGroup>
+      <Configuration>Debug</Configuration>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <Compile Include="Program.cs" />
+    </ItemGroup>
+
+    <ToyCompile Sources="@(Compile)"
+                Configuration="$(Configuration)">
+      <Output TaskParameter="Assembly"
+              PropertyName="AssemblyPath" />
+    </ToyCompile>
+  </Target>
+</Project>

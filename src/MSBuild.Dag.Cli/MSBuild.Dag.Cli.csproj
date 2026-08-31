@@ -1,0 +1,16 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\MSBuild.Dag.MSBuild\MSBuild.Dag.MSBuild.csproj" />
+    <ProjectReference Include="..\MSBuild.Dag.Visualization\MSBuild.Dag.Visualization.csproj" />
+    <ProjectReference Include="..\MSBuild.Dag.Execution\MSBuild.Dag.Execution.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>
