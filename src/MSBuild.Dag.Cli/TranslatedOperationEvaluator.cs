@@ -38,6 +38,34 @@ internal static class TranslatedOperationEvaluator
                         operation.Assembly,
                         $"bin/{configuration}/App.dll");
                     return ValueTask.CompletedTask;
+                })
+            .Add<EqualOperation<string>>(
+                static (operation, values, _) =>
+                {
+                    values.Set(
+                        operation.Result,
+                        StringComparer.OrdinalIgnoreCase.Equals(
+                            values.Get(operation.Left),
+                            values.Get(operation.Right)));
+                    return ValueTask.CompletedTask;
+                })
+            .Add<NotEqualOperation<string>>(
+                static (operation, values, _) =>
+                {
+                    values.Set(
+                        operation.Result,
+                        !StringComparer.OrdinalIgnoreCase.Equals(
+                            values.Get(operation.Left),
+                            values.Get(operation.Right)));
+                    return ValueTask.CompletedTask;
+                })
+            .Add<NotOperation>(
+                static (operation, values, _) =>
+                {
+                    values.Set(
+                        operation.Result,
+                        !values.Get(operation.Operand));
+                    return ValueTask.CompletedTask;
                 });
 
     public static ValueTask EvaluateAsync(

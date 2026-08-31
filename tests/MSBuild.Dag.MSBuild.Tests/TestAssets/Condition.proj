@@ -1,0 +1,8 @@
+<Project>
+  <PropertyGroup>
+    <Enabled>yes</Enabled>
+  </PropertyGroup>
+
+  <Target Name="Build"
+          Condition="'$(Enabled)' != 'no'" />
+</Project>

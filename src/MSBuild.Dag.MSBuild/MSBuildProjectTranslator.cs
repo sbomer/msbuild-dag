@@ -1,12 +1,17 @@
 using Microsoft.Build.Evaluation;
 using Microsoft.Build.Execution;
 using MSBuild.Dag.Core;
+using System.Text.RegularExpressions;
 using DagOperation = MSBuild.Dag.Core.Operation;
 
 namespace MSBuild.Dag.MSBuild;
 
 public sealed class MSBuildProjectTranslator
 {
+    private static readonly Regex s_comparisonCondition = new(
+        @"^\s*'\$\((?<property>[^)]+)\)'\s*(?<operator>==|!=)\s*'(?<literal>[^']*)'\s*$",
+        RegexOptions.CultureInvariant);
+
     public TranslationResult Translate(string projectPath, string targetName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(projectPath);
@@ -23,17 +28,18 @@ public sealed class MSBuildProjectTranslator
                 nameof(targetName));
         }
 
+        var context = new TranslationContext(projectInstance);
+
         if (!string.IsNullOrWhiteSpace(target.Condition))
         {
-            throw Unsupported("Target conditions");
+            context.TargetConditions[targetName] =
+                context.TranslateCondition(target.Condition);
         }
 
         if (!string.IsNullOrWhiteSpace(target.DependsOnTargets))
         {
             throw Unsupported("DependsOnTargets");
         }
-
-        var context = new TranslationContext(projectInstance);
 
         foreach (var child in target.Children)
         {
@@ -63,6 +69,9 @@ public sealed class MSBuildProjectTranslator
                 StringComparer.OrdinalIgnoreCase),
             new Dictionary<string, Value<IReadOnlyList<string>>>(
                 context.Items,
+                StringComparer.OrdinalIgnoreCase),
+            new Dictionary<string, Value<bool>>(
+                context.TargetConditions,
                 StringComparer.OrdinalIgnoreCase));
     }
 
@@ -184,7 +193,41 @@ public sealed class MSBuildProjectTranslator
         public Dictionary<string, Value<IReadOnlyList<string>>> Items { get; } =
             new(StringComparer.OrdinalIgnoreCase);
 
+        public Dictionary<string, Value<bool>> TargetConditions { get; } =
+            new(StringComparer.OrdinalIgnoreCase);
+
         public List<DagOperation> Operations { get; } = [];
+
+        public Value<bool> TranslateCondition(string expression)
+        {
+            var match = s_comparisonCondition.Match(expression);
+
+            if (!match.Success)
+            {
+                throw Unsupported($"target condition '{expression}'");
+            }
+
+            var left = GetProperty(match.Groups["property"].Value);
+            var right = AddConstant(match.Groups["literal"].Value);
+
+            DagOperation comparison = match.Groups["operator"].Value switch
+            {
+                "==" => new EqualOperation<string>(left, right),
+                "!=" => new NotEqualOperation<string>(left, right),
+                _ => throw new InvalidOperationException(
+                    "The condition parser produced an unknown comparison operator."),
+            };
+
+            Operations.Add(comparison);
+
+            return comparison switch
+            {
+                EqualOperation<string> equal => equal.Result,
+                NotEqualOperation<string> notEqual => notEqual.Result,
+                _ => throw new InvalidOperationException(
+                    "The condition parser produced an unknown comparison operation."),
+            };
+        }
 
         public Value<string> ResolvePropertyExpression(string expression)
         {

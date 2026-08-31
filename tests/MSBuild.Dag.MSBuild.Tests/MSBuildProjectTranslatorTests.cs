@@ -36,7 +36,7 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Fact]
-    public void LoadsSdkStyleProjectBeforeReportingUnsupportedSemantics()
+    public void LoadsSdkStyleProjectBeforeReportingUnsupportedTargetDependencies()
     {
         var projectPath = Path.Combine(
             AppContext.BaseDirectory,
@@ -46,6 +46,23 @@ public sealed class MSBuildProjectTranslatorTests
         var exception = Assert.Throws<NotSupportedException>(
             () => new MSBuildProjectTranslator().Translate(projectPath, "Build"));
 
-        Assert.Contains("Target conditions", exception.Message);
+        Assert.Contains("DependsOnTargets", exception.Message);
+    }
+
+    [Fact]
+    public void TranslatesTargetConditionToBooleanDataflow()
+    {
+        var projectPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "TestAssets",
+            "Condition.proj");
+
+        var result = new MSBuildProjectTranslator().Translate(projectPath, "Build");
+
+        var comparison = Assert.Single(
+            result.Graph.Operations.OfType<NotEqualOperation<string>>());
+
+        Assert.Same(comparison.Result, result.TargetConditions["Build"]);
+        Assert.Equal(2, result.Graph.GetDependencies(comparison).Count);
     }
 }

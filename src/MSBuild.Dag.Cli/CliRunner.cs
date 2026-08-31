@@ -89,5 +89,11 @@ internal static class CliRunner
             Console.WriteLine(
                 $"  @({item.Key}) = {string.Join("; ", values.Get(item.Value))}");
         }
+
+        foreach (var condition in result.TargetConditions)
+        {
+            Console.WriteLine(
+                $"  Condition({condition.Key}) = {values.Get(condition.Value)}");
+        }
     }
 }
