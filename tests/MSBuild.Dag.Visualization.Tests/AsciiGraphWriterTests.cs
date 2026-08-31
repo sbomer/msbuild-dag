@@ -40,7 +40,7 @@ public sealed class AsciiGraphWriterTests
     }
 
     [Fact]
-    public void OmitsOrderEdgeWhenDataAlreadyConnectsOperations()
+    public void RendersOrderEdgeWhenDataAlreadyConnectsOperations()
     {
         var initialOrder = new Value<OrderToken>();
         var producer = new OrderedTestOperation(initialOrder);
@@ -51,8 +51,8 @@ public sealed class AsciiGraphWriterTests
 
         var result = AsciiGraphWriter.Render(graph);
 
-        Assert.Equal(3, CountOccurrences(result, "▶"));
-        Assert.DoesNotContain('┼', result);
+        Assert.Equal(5, CountOccurrences(result, "▶"));
+        Assert.Contains('╌', result);
     }
 
     [Fact]
@@ -69,10 +69,11 @@ public sealed class AsciiGraphWriterTests
         var result = VerticalGraphWriter.Render(graph);
 
         Assert.Contains("order", result);
+        Assert.Contains('╌', result);
+        Assert.Contains('╎', result);
         Assert.Contains("i0", result);
         Assert.Contains("i1", result);
         Assert.Equal(1, CountOccurrences(result, "[2] TestOperation"));
-        Assert.DoesNotContain('┼', result);
     }
 
     private static int CountOccurrences(string value, string search)
@@ -109,7 +110,7 @@ public sealed class AsciiGraphWriterTests
             OrderInput = orderInput;
             _inputs = input is null
                 ? [orderInput]
-                : [input, orderInput];
+                : [orderInput, input];
         }
 
         public Value<OrderToken>? OrderInput { get; }
@@ -121,6 +122,6 @@ public sealed class AsciiGraphWriterTests
         public override IReadOnlyList<Value> Inputs => _inputs;
 
         public override IReadOnlyList<Value> Outputs =>
-            [Result, OrderOutput!];
+            [OrderOutput!, Result];
     }
 }

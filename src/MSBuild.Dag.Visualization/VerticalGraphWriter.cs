@@ -57,18 +57,36 @@ public static class VerticalGraphWriter
         var targetY = edge.Target.Top;
         var firstRouteY = sourceY + 2;
         var lastRouteY = targetY - 2;
+        var horizontalStroke = edge.IsOrderEdge ? '╌' : '─';
+        var verticalStroke = edge.IsOrderEdge ? '╎' : '│';
 
-        canvas.DrawVertical(sourceX, sourceY, firstRouteY);
-        canvas.DrawVertical(targetX, lastRouteY, targetY);
+        canvas.DrawVertical(sourceX, sourceY, firstRouteY, verticalStroke);
+        canvas.DrawVertical(targetX, lastRouteY, targetY, verticalStroke);
 
         if (edge.LaneX is int laneX)
         {
-            var laneStartY = firstRouteY;
-            var laneEndY = lastRouteY - edge.TargetSlot;
-            canvas.DrawHorizontal(laneStartY, sourceX, laneX);
-            canvas.DrawVertical(laneX, laneStartY, laneEndY);
-            canvas.DrawHorizontal(laneEndY, laneX, targetX);
-            canvas.DrawVertical(targetX, laneEndY, lastRouteY);
+            var laneStartY = edge.DepartureY!.Value;
+            var laneEndY = edge.ArrivalY!.Value;
+            canvas.DrawHorizontal(
+                laneStartY,
+                sourceX,
+                laneX,
+                horizontalStroke);
+            canvas.DrawVertical(
+                laneX,
+                laneStartY,
+                laneEndY,
+                verticalStroke);
+            canvas.DrawHorizontal(
+                laneEndY,
+                laneX,
+                targetX,
+                horizontalStroke);
+            canvas.DrawVertical(
+                targetX,
+                laneEndY,
+                lastRouteY,
+                verticalStroke);
             canvas.Overwrite(
                 sourceX,
                 laneStartY,
@@ -90,16 +108,32 @@ public static class VerticalGraphWriter
 
         if (sourceX == targetX)
         {
-            canvas.DrawVertical(sourceX, firstRouteY, lastRouteY);
+            canvas.DrawVertical(
+                sourceX,
+                firstRouteY,
+                lastRouteY,
+                verticalStroke);
             return;
         }
 
         var middleY = Math.Min(
             lastRouteY,
-            firstRouteY + edge.TargetSlot + 1);
-        canvas.DrawVertical(sourceX, firstRouteY, middleY);
-        canvas.DrawHorizontal(middleY, sourceX, targetX);
-        canvas.DrawVertical(targetX, middleY, lastRouteY);
+            firstRouteY + (edge.RouteLane ?? 0));
+        canvas.DrawVertical(
+            sourceX,
+            firstRouteY,
+            middleY,
+            verticalStroke);
+        canvas.DrawHorizontal(
+            middleY,
+            sourceX,
+            targetX,
+            horizontalStroke);
+        canvas.DrawVertical(
+            targetX,
+            middleY,
+            lastRouteY,
+            verticalStroke);
         canvas.Overwrite(
             sourceX,
             middleY,
@@ -121,6 +155,8 @@ public static class VerticalGraphWriter
 
         var edgeLabel = edge.IsOrderEdge
             ? "order"
+            : edge.IsGuardEdge
+                ? "guard"
             : $"o{edge.SourcePort!.Value}";
         canvas.Write(sourceX + 1, edge.Source.Bottom + 1, edgeLabel);
 
@@ -169,19 +205,13 @@ public static class VerticalGraphWriter
             for (var index = 0; index < graph.Operations.Count; index++)
             {
                 var operation = graph.Operations[index];
-                var visibleOrderInput =
-                    HasVisibleOrderInput(graph, operation);
-                var visibleOrderOutput =
-                    HasVisibleOrderOutput(graph, operation);
                 operationNodes.Add(
                     operation,
                     new Node(
                         $"[{index}] {GetTypeDisplayName(operation.GetType())}",
                         index,
-                        operation.Inputs.Count(IsDataValue) +
-                            (visibleOrderInput ? 1 : 0),
-                        operation.Outputs.Count(IsDataValue) +
-                            (visibleOrderOutput ? 1 : 0)));
+                        operation.Inputs.Count,
+                        operation.Outputs.Count));
             }
 
             AssignOperationRanks(graph, operationNodes);
@@ -204,28 +234,24 @@ public static class VerticalGraphWriter
                     consumedValues.Add(input);
                     var producer = graph.GetProducer(input);
                     var isOrderEdge = IsOrderValue(input);
+                    var isGuardEdge = IsGuardValue(input);
 
                     if (producer is not null)
                     {
-                        if (isOrderEdge &&
-                            HasDataDependency(producer, consumer))
-                        {
-                            continue;
-                        }
-
                         edges.Add(
                             new Edge(
                                 operationNodes[producer],
                                 consumerNode,
-                                GetOutputSlot(graph, producer, input),
-                                GetInputSlot(graph, consumer, input),
-                                isOrderEdge
+                                IndexOfReference(producer.Outputs, input),
+                                inputIndex,
+                                isOrderEdge || isGuardEdge
                                     ? null
-                                    : IndexOfDataReference(producer.Outputs, input),
-                                isOrderEdge
+                                    : IndexOfReference(producer.Outputs, input),
+                                isOrderEdge || isGuardEdge
                                     ? null
-                                    : IndexOfDataReference(consumer.Inputs, input),
-                                isOrderEdge));
+                                    : inputIndex,
+                                isOrderEdge,
+                                isGuardEdge));
                         continue;
                     }
 
@@ -248,15 +274,13 @@ public static class VerticalGraphWriter
                             externalNode,
                             consumerNode,
                             SourceSlot: 0,
-                            TargetSlot: GetInputSlot(
-                                graph,
-                                consumer,
-                                input),
-                            SourcePort: 0,
-                            TargetPort: isOrderEdge
+                            TargetSlot: inputIndex,
+                            SourcePort: isOrderEdge || isGuardEdge ? null : 0,
+                            TargetPort: isOrderEdge || isGuardEdge
                                 ? null
-                                : IndexOfDataReference(consumer.Inputs, input),
-                            isOrderEdge));
+                                : inputIndex,
+                            isOrderEdge,
+                            isGuardEdge));
                 }
             }
 
@@ -268,12 +292,13 @@ public static class VerticalGraphWriter
                 {
                     var output = operation.Outputs[outputIndex];
 
-                    if (consumedValues.Contains(output) ||
-                        IsOrderValue(output))
+                    if (consumedValues.Contains(output))
                     {
                         continue;
                     }
 
+                    var isOrderEdge = IsOrderValue(output);
+                    var isGuardEdge = IsGuardValue(output);
                     var outputNode = new Node(
                         $"output[{producerNode.Order}:{outputIndex}]",
                         nextOrder++,
@@ -288,13 +313,14 @@ public static class VerticalGraphWriter
                         new Edge(
                             producerNode,
                             outputNode,
-                            GetOutputSlot(graph, operation, output),
+                            outputIndex,
                             TargetSlot: 0,
-                            SourcePort: IndexOfDataReference(
-                                operation.Outputs,
-                                output),
+                            SourcePort: isOrderEdge || isGuardEdge
+                                ? null
+                                : outputIndex,
                             TargetPort: null,
-                            IsOrderEdge: false));
+                            isOrderEdge,
+                            isGuardEdge));
                 }
             }
 
@@ -309,26 +335,33 @@ public static class VerticalGraphWriter
                     group => group.Sum(node => node.Width) +
                         ((group.Count() - 1) * HorizontalGap));
             var contentWidth = rowWidths.Values.Max();
+            var longEdges = edges
+                .Where(edge => edge.Target.Rank > edge.Source.Rank + 1)
+                .ToArray();
+
+            for (var index = 0; index < longEdges.Length; index++)
+            {
+                longEdges[index].LaneX =
+                    contentWidth + 2 + (index * 2);
+            }
 
             var ranks = nodes
                 .GroupBy(node => node.Rank)
                 .OrderBy(group => group.Key)
                 .ToArray();
-            var top = 0;
 
-            for (var rankIndex = 0; rankIndex < ranks.Length; rankIndex++)
+            foreach (var rank in ranks)
             {
-                var rank = ranks[rankIndex];
                 var rankNodes = rank
                     .OrderBy(node => GetOrderingHint(node, edges))
                     .ThenBy(node => node.Order)
                     .ToArray();
-                var left = (contentWidth - rowWidths[rank.Key]) / 2;
+                var left =
+                    (contentWidth - rowWidths[rank.Key]) / 2;
 
                 foreach (var node in rankNodes)
                 {
                     node.Left = left;
-                    node.Top = top;
                     left += node.Width + HorizontalGap;
                 }
 
@@ -337,45 +370,48 @@ public static class VerticalGraphWriter
                     AlignWithSinglePredecessor(
                         rankNodes[0],
                         edges,
+                        minimumLeft: 0,
                         contentWidth);
+                }
+            }
+
+            var routeLaneCounts = AssignRouteLanes(ranks, edges);
+
+            var top = 0;
+
+            for (var rankIndex = 0; rankIndex < ranks.Length; rankIndex++)
+            {
+                var rank = ranks[rankIndex];
+
+                foreach (var node in rank)
+                {
+                    node.Top = top;
                 }
 
                 if (rankIndex + 1 < ranks.Length)
                 {
-                    var nextRank = ranks[rankIndex + 1].Key;
-                    var targetSlots = edges
-                        .Where(edge => edge.Target.Rank == nextRank)
-                        .Select(edge => edge.TargetSlot)
-                        .ToArray();
-                    var maximumTargetSlot = targetSlots
-                        .DefaultIfEmpty(0)
-                        .Max();
-                    var routingGap = maximumTargetSlot == 0
-                        ? 3
-                        : maximumTargetSlot + 4;
-                    var maximumFanOut = edges
-                        .Where(edge => edge.Source.Rank == rank.Key)
-                        .GroupBy(edge => edge.Source)
-                        .Select(group => group.Count())
-                        .DefaultIfEmpty(0)
-                        .Max();
-
-                    if (maximumFanOut > 1)
-                    {
-                        routingGap = Math.Max(routingGap, 4);
-                    }
+                    var routingGap = Math.Max(
+                        3,
+                        routeLaneCounts[rank.Key] + 2);
 
                     top += Node.Height + routingGap;
                 }
             }
 
-            var longEdges = edges
-                .Where(edge => edge.Target.Rank > edge.Source.Rank + 1)
-                .ToArray();
+            var rankIndexes = ranks
+                .Select((rank, index) => (rank.Key, index))
+                .ToDictionary(pair => pair.Key, pair => pair.index);
 
-            for (var index = 0; index < longEdges.Length; index++)
+            foreach (var edge in longEdges)
             {
-                longEdges[index].LaneX = contentWidth + 2 + (index * 2);
+                edge.DepartureY =
+                    edge.Source.Bottom + 2 + edge.DepartureLane!.Value;
+                var precedingTargetRank =
+                    ranks[rankIndexes[edge.Target.Rank] - 1];
+                edge.ArrivalY =
+                    precedingTargetRank.First().Bottom +
+                    2 +
+                    edge.ArrivalLane!.Value;
             }
 
             var width = contentWidth + 2 + (longEdges.Length * 2);
@@ -384,9 +420,98 @@ public static class VerticalGraphWriter
             return new Layout(nodes, edges, width, height);
         }
 
+        private static Dictionary<int, int> AssignRouteLanes(
+            IReadOnlyList<IGrouping<int, Node>> ranks,
+            IReadOnlyList<Edge> edges)
+        {
+            var result = new Dictionary<int, int>();
+
+            for (var rankIndex = 0; rankIndex + 1 < ranks.Count; rankIndex++)
+            {
+                var sourceRank = ranks[rankIndex].Key;
+                var targetRank = ranks[rankIndex + 1].Key;
+                var lanes = new List<List<(int Start, int End)>>();
+                var segments = new List<(
+                    int Start,
+                    int End,
+                    Action<int> AssignLane)>();
+
+                foreach (var edge in edges)
+                {
+                    if (edge.Source.Rank == sourceRank &&
+                        edge.Target.Rank == targetRank)
+                    {
+                        AddSegment(
+                            edge.Source.GetOutputX(edge.SourceSlot),
+                            edge.Target.GetInputX(edge.TargetSlot),
+                            lane => edge.RouteLane = lane);
+                    }
+                    else if (edge.Source.Rank == sourceRank &&
+                        edge.Target.Rank > targetRank)
+                    {
+                        AddSegment(
+                            edge.Source.GetOutputX(edge.SourceSlot),
+                            edge.LaneX!.Value,
+                            lane => edge.DepartureLane = lane);
+                    }
+                    else if (edge.Source.Rank < sourceRank &&
+                        edge.Target.Rank == targetRank)
+                    {
+                        AddSegment(
+                            edge.LaneX!.Value,
+                            edge.Target.GetInputX(edge.TargetSlot),
+                            lane => edge.ArrivalLane = lane);
+                    }
+                }
+
+                foreach (var segment in segments
+                    .OrderByDescending(
+                        segment => segment.End - segment.Start)
+                    .ThenBy(segment => segment.Start))
+                {
+                    var laneIndex = lanes.FindIndex(
+                        lane => lane.All(
+                            existing =>
+                                segment.End < existing.Start ||
+                                segment.Start > existing.End));
+
+                    if (laneIndex < 0)
+                    {
+                        laneIndex = lanes.Count;
+                        lanes.Add([]);
+                    }
+
+                    lanes[laneIndex].Add((segment.Start, segment.End));
+                    segment.AssignLane(laneIndex);
+                }
+
+                result[sourceRank] = lanes.Count;
+
+                void AddSegment(
+                    int firstX,
+                    int secondX,
+                    Action<int> assignLane)
+                {
+                    if (firstX == secondX)
+                    {
+                        assignLane(0);
+                        return;
+                    }
+
+                    segments.Add(
+                        (Math.Min(firstX, secondX),
+                         Math.Max(firstX, secondX),
+                         assignLane));
+                }
+            }
+
+            return result;
+        }
+
         private static void AlignWithSinglePredecessor(
             Node node,
             IReadOnlyList<Edge> edges,
+            int minimumLeft,
             int contentWidth)
         {
             var incoming = edges
@@ -407,14 +532,26 @@ public static class VerticalGraphWriter
 
             node.Left = Math.Clamp(
                 sourceX - targetOffset,
-                0,
-                contentWidth - node.Width);
+                minimumLeft,
+                minimumLeft + contentWidth - node.Width);
         }
 
         private static double GetOrderingHint(
             Node node,
             IReadOnlyList<Edge> edges)
         {
+            var outgoing = edges
+                .Where(edge => ReferenceEquals(edge.Source, node))
+                .ToArray();
+
+            if (outgoing.Length > 0)
+            {
+                return outgoing.Min(
+                    edge =>
+                        (edge.Target.Order * 1_000) +
+                        edge.TargetSlot);
+            }
+
             var incoming = edges
                 .Where(edge => ReferenceEquals(edge.Target, node))
                 .Where(edge => edge.Source.IsPositioned)
@@ -520,99 +657,15 @@ public static class VerticalGraphWriter
             }
         }
 
-        private static bool HasVisibleOrderInput(
-            BuildGraph graph,
-            Operation consumer)
-        {
-            foreach (var input in consumer.Inputs.Where(IsOrderValue))
-            {
-                var producer = graph.GetProducer(input);
-
-                if (producer is null ||
-                    !HasDataDependency(producer, consumer))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private static bool HasVisibleOrderOutput(
-            BuildGraph graph,
-            Operation producer)
-        {
-            foreach (var output in producer.Outputs.Where(IsOrderValue))
-            {
-                foreach (var consumer in graph.Operations)
-                {
-                    if (consumer.Inputs.Any(
-                            input => ReferenceEquals(input, output)) &&
-                        !HasDataDependency(producer, consumer))
-                    {
-                        return true;
-                    }
-                }
-            }
-
-            return false;
-        }
-
-        private static bool HasDataDependency(
-            Operation producer,
-            Operation consumer) =>
-            producer.Outputs
-                .Where(value => !IsOrderValue(value))
-                .Any(
-                    output => consumer.Inputs.Any(
-                        input => ReferenceEquals(input, output)));
-
-        private static int GetInputSlot(
-            BuildGraph graph,
-            Operation consumer,
-            Value expected)
-        {
-            if (IsOrderValue(expected))
-            {
-                return consumer.Inputs.Count(IsDataValue);
-            }
-
-            return IndexOfDataReference(consumer.Inputs, expected);
-        }
-
-        private static int GetOutputSlot(
-            BuildGraph graph,
-            Operation producer,
-            Value expected)
-        {
-            if (IsOrderValue(expected))
-            {
-                return 0;
-            }
-
-            var dataIndex =
-                IndexOfDataReference(producer.Outputs, expected);
-            return HasVisibleOrderOutput(graph, producer)
-                ? dataIndex + 1
-                : dataIndex;
-        }
-
-        private static int IndexOfDataReference(
+        private static int IndexOfReference(
             IReadOnlyList<Value> values,
             Value expected)
         {
-            var dataIndex = 0;
-
-            foreach (var value in values)
+            for (var index = 0; index < values.Count; index++)
             {
-                if (ReferenceEquals(value, expected))
+                if (ReferenceEquals(values[index], expected))
                 {
-                    return dataIndex;
-                }
-
-                if (!IsOrderValue(value))
-                {
-                    dataIndex++;
+                    return index;
                 }
             }
 
@@ -674,9 +727,20 @@ public static class VerticalGraphWriter
         int TargetSlot,
         int? SourcePort,
         int? TargetPort,
-        bool IsOrderEdge)
+        bool IsOrderEdge,
+        bool IsGuardEdge)
     {
         public int? LaneX { get; set; }
+
+        public int? RouteLane { get; set; }
+
+        public int? DepartureLane { get; set; }
+
+        public int? ArrivalLane { get; set; }
+
+        public int? DepartureY { get; set; }
+
+        public int? ArrivalY { get; set; }
     }
 
     private sealed class Canvas
@@ -699,19 +763,27 @@ public static class VerticalGraphWriter
             }
         }
 
-        public void DrawHorizontal(int y, int startX, int endX)
+        public void DrawHorizontal(
+            int y,
+            int startX,
+            int endX,
+            char character = '─')
         {
             for (var x = Math.Min(startX, endX); x <= Math.Max(startX, endX); x++)
             {
-                Set(x, y, '─');
+                Set(x, y, character);
             }
         }
 
-        public void DrawVertical(int x, int startY, int endY)
+        public void DrawVertical(
+            int x,
+            int startY,
+            int endY,
+            char character = '│')
         {
             for (var y = Math.Min(startY, endY); y <= Math.Max(startY, endY); y++)
             {
-                Set(x, y, '│');
+                Set(x, y, character);
             }
         }
 
@@ -722,12 +794,19 @@ public static class VerticalGraphWriter
             _characters[y, x] = (existing, character) switch
             {
                 ('\0', _) => character,
-                ('─', '│') or ('│', '─') => '┼',
+                _ when IsHorizontal(existing) && IsVertical(character) => '┼',
+                _ when IsVertical(existing) && IsHorizontal(character) => '┼',
                 ('┼', _) or (_, '┼') => '┼',
                 _ when existing == character => existing,
                 _ => character,
             };
         }
+
+        private static bool IsHorizontal(char character) =>
+            character is '─' or '╌';
+
+        private static bool IsVertical(char character) =>
+            character is '│' or '╎';
 
         public void Overwrite(int x, int y, char character)
         {
@@ -786,6 +865,7 @@ public static class VerticalGraphWriter
     private static bool IsOrderValue(Value value) =>
         value is Value<OrderToken>;
 
-    private static bool IsDataValue(Value value) =>
-        !IsOrderValue(value);
+    private static bool IsGuardValue(Value value) =>
+        value is Value<GuardToken>;
+
 }
