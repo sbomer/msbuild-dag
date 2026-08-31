@@ -32,8 +32,9 @@ public sealed class MSBuildProjectTranslator
 
         if (!string.IsNullOrWhiteSpace(target.Condition))
         {
-            context.TargetConditions[targetName] =
-                context.TranslateCondition(target.Condition);
+            var condition = context.TranslateCondition(target.Condition);
+            context.TargetConditions[targetName] = condition;
+            context.GateFollowingOperations(condition);
         }
 
         if (!string.IsNullOrWhiteSpace(target.DependsOnTargets))
@@ -122,9 +123,12 @@ public sealed class MSBuildProjectTranslator
 
             var existingItems = context.GetItems(item.ItemType);
             var appendedItems = context.ResolveItemsExpression(item.Include);
-            var concat = new ConcatItemsOperation(existingItems, appendedItems);
+            var concat = new ConcatItemsOperation(
+                existingItems,
+                appendedItems,
+                context.CurrentOrderToken);
 
-            context.Operations.Add(concat);
+            context.AddOperation(concat);
             context.Items[item.ItemType] = concat.Result;
         }
     }
@@ -145,11 +149,15 @@ public sealed class MSBuildProjectTranslator
 
         var sourcesExpression = GetRequiredParameter(task, "Sources");
         var configurationExpression = GetRequiredParameter(task, "Configuration");
+        var sources = context.ResolveItemsExpression(sourcesExpression);
+        var configuration =
+            context.ResolvePropertyExpression(configurationExpression);
         var compile = new ToyCompileOperation(
-            context.ResolveItemsExpression(sourcesExpression),
-            context.ResolvePropertyExpression(configurationExpression));
+            sources,
+            configuration,
+            context.CurrentOrderToken);
 
-        context.Operations.Add(compile);
+        context.AddOperation(compile);
 
         foreach (var output in task.Outputs)
         {
@@ -196,7 +204,27 @@ public sealed class MSBuildProjectTranslator
         public Dictionary<string, Value<bool>> TargetConditions { get; } =
             new(StringComparer.OrdinalIgnoreCase);
 
+        public Value<OrderToken>? CurrentOrderToken { get; private set; }
+
         public List<DagOperation> Operations { get; } = [];
+
+        public void AddOperation(DagOperation operation, bool ordered = true)
+        {
+            Operations.Add(operation);
+
+            if (ordered &&
+                operation is IOrderedOperation { OrderOutput: not null } orderedOperation)
+            {
+                CurrentOrderToken = orderedOperation.OrderOutput;
+            }
+        }
+
+        public void GateFollowingOperations(Value<bool> condition)
+        {
+            var gate = new ConditionGateOperation(condition);
+            Operations.Add(gate);
+            CurrentOrderToken = gate.Result;
+        }
 
         public Value<bool> TranslateCondition(string expression)
         {
@@ -218,7 +246,7 @@ public sealed class MSBuildProjectTranslator
                     "The condition parser produced an unknown comparison operator."),
             };
 
-            Operations.Add(comparison);
+            AddOperation(comparison, ordered: false);
 
             return comparison switch
             {
@@ -274,7 +302,7 @@ public sealed class MSBuildProjectTranslator
                 .Select(item => item.EvaluatedInclude)
                 .ToArray();
 
-            value = AddConstant(initialItems);
+            value = AddConstant(initialItems, ordered: false);
             Items.Add(itemType, value);
             return value;
         }
@@ -286,15 +314,19 @@ public sealed class MSBuildProjectTranslator
                 return value;
             }
 
-            value = AddConstant(project.GetPropertyValue(propertyName));
+            value = AddConstant(
+                project.GetPropertyValue(propertyName),
+                ordered: false);
             Properties.Add(propertyName, value);
             return value;
         }
 
-        private Value<T> AddConstant<T>(T content)
+        private Value<T> AddConstant<T>(T content, bool ordered = true)
         {
-            var operation = new ConstantOperation<T>(content);
-            Operations.Add(operation);
+            var operation = new ConstantOperation<T>(
+                content,
+                ordered ? CurrentOrderToken : null);
+            AddOperation(operation, ordered);
             return operation.Result;
         }
 

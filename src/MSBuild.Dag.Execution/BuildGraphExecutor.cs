@@ -44,7 +44,35 @@ public sealed class BuildGraphExecutor
                 }
             }
 
+            var shouldSkip = operation.Inputs.Any(
+                input =>
+                    !values.IsAvailable(input) ||
+                    input is Value<OrderToken> orderToken &&
+                    !values.Get(orderToken).IsActive);
+
+            if (shouldSkip)
+            {
+                foreach (var output in operation.Outputs)
+                {
+                    values.SetUnavailable(output);
+                }
+
+                completed.Add(operation);
+                return;
+            }
+
             await executeOperation(operation, values, cancellationToken);
+
+            if (operation is IOrderedOperation
+                {
+                    OrderInput: not null,
+                    OrderOutput: not null,
+                } orderedOperation)
+            {
+                values.Set(
+                    orderedOperation.OrderOutput,
+                    values.Get(orderedOperation.OrderInput));
+            }
 
             foreach (var output in operation.Outputs)
             {

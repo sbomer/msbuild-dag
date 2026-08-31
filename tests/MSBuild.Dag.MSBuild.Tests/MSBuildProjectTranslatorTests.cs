@@ -28,7 +28,14 @@ public sealed class MSBuildProjectTranslatorTests
         Assert.Contains(
             result.Graph.GetDependencies(compile),
             operation => ReferenceEquals(operation, concat));
-        Assert.Equal(2, result.Graph.GetDependencies(compile).Count);
+
+        var configuration = Assert.Single(
+            result.Graph.Operations
+                .OfType<ConstantOperation<string>>(),
+            operation => operation.Content == "Debug");
+        Assert.Contains(
+            result.Graph.GetDependencies(configuration),
+            operation => operation is ConditionGateOperation);
 
         var itemConstants = result.Graph.Operations
             .OfType<ConstantOperation<IReadOnlyList<string>>>()
@@ -70,8 +77,7 @@ public sealed class MSBuildProjectTranslatorTests
         Assert.Equal(2, result.Graph.GetDependencies(comparison).Count);
     }
 
-    [Fact(
-        Skip = "Target condition values are not yet connected to execution control.")]
+    [Fact]
     public async Task FalseTargetConditionPreventsTargetBodyExecution()
     {
         var projectPath = Path.Combine(
@@ -101,6 +107,14 @@ public sealed class MSBuildProjectTranslatorTests
                         StringComparer.OrdinalIgnoreCase.Equals(
                             values.Get(operation.Left),
                             values.Get(operation.Right)));
+                    return ValueTask.CompletedTask;
+                })
+            .Add<ConditionGateOperation>(
+                static (operation, values, _) =>
+                {
+                    values.Set(
+                        operation.Result,
+                        new OrderToken(values.Get(operation.Condition)));
                     return ValueTask.CompletedTask;
                 })
             .Add<ConcatItemsOperation>(

@@ -87,6 +87,30 @@ public sealed class BuildGraphExecutorTests
         Assert.Contains("No evaluator", exception.Message);
     }
 
+    [Fact]
+    public async Task InactiveOrderTokenSkipsOperation()
+    {
+        var orderToken = new Value<OrderToken>();
+        var operation = new OrderedSourceOperation(orderToken);
+        var graph = new BuildGraph([operation]);
+        var values = new ValueStore();
+        values.Set(orderToken, new OrderToken(IsActive: false));
+        var executed = false;
+
+        await new BuildGraphExecutor().ExecuteAsync(
+            graph,
+            values,
+            (_, _, _) =>
+            {
+                executed = true;
+                return ValueTask.CompletedTask;
+            });
+
+        Assert.False(executed);
+        Assert.True(values.Contains(operation.Result));
+        Assert.False(values.IsAvailable(operation.Result));
+    }
+
     private sealed class SourceOperation : Operation
     {
         public Value<int> Result { get; } = new();
@@ -105,5 +129,23 @@ public sealed class BuildGraphExecutorTests
         public override IReadOnlyList<Value> Inputs => [Input];
 
         public override IReadOnlyList<Value> Outputs => [Result];
+    }
+
+    private sealed class OrderedSourceOperation : Operation, IOrderedOperation
+    {
+        public OrderedSourceOperation(Value<OrderToken> orderToken)
+        {
+            OrderInput = orderToken;
+        }
+
+        public Value<int> Result { get; } = new();
+
+        public Value<OrderToken>? OrderInput { get; }
+
+        public Value<OrderToken>? OrderOutput { get; } = new();
+
+        public override IReadOnlyList<Value> Inputs => [OrderInput!];
+
+        public override IReadOnlyList<Value> Outputs => [Result, OrderOutput!];
     }
 }

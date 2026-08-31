@@ -39,6 +39,42 @@ public sealed class AsciiGraphWriterTests
         Assert.Equal($"BuildGraph{Environment.NewLine}(empty){Environment.NewLine}", result);
     }
 
+    [Fact]
+    public void OmitsOrderEdgeWhenDataAlreadyConnectsOperations()
+    {
+        var initialOrder = new Value<OrderToken>();
+        var producer = new OrderedTestOperation(initialOrder);
+        var consumer = new OrderedTestOperation(
+            producer.OrderOutput!,
+            producer.Result);
+        var graph = new BuildGraph([producer, consumer]);
+
+        var result = AsciiGraphWriter.Render(graph);
+
+        Assert.Equal(3, CountOccurrences(result, "▶"));
+        Assert.DoesNotContain('┼', result);
+    }
+
+    [Fact]
+    public void VerticalGraphLabelsOrderEdgesSeparatelyFromDataEdges()
+    {
+        var initialOrder = new Value<OrderToken>();
+        var first = new OrderedTestOperation(initialOrder);
+        var second = new OrderedTestOperation(first.OrderOutput!);
+        var consumer = new TestOperation(
+            [first.Result, second.Result],
+            [new Value()]);
+        var graph = new BuildGraph([first, second, consumer]);
+
+        var result = VerticalGraphWriter.Render(graph);
+
+        Assert.Contains("order", result);
+        Assert.Contains("i0", result);
+        Assert.Contains("i1", result);
+        Assert.Equal(1, CountOccurrences(result, "[2] TestOperation"));
+        Assert.DoesNotContain('┼', result);
+    }
+
     private static int CountOccurrences(string value, string search)
     {
         var count = 0;
@@ -60,5 +96,31 @@ public sealed class AsciiGraphWriterTests
         public override IReadOnlyList<Value> Inputs { get; } = inputs;
 
         public override IReadOnlyList<Value> Outputs { get; } = outputs;
+    }
+
+    private sealed class OrderedTestOperation : Operation, IOrderedOperation
+    {
+        private readonly IReadOnlyList<Value> _inputs;
+
+        public OrderedTestOperation(
+            Value<OrderToken> orderInput,
+            Value<int>? input = null)
+        {
+            OrderInput = orderInput;
+            _inputs = input is null
+                ? [orderInput]
+                : [input, orderInput];
+        }
+
+        public Value<OrderToken>? OrderInput { get; }
+
+        public Value<OrderToken>? OrderOutput { get; } = new();
+
+        public Value<int> Result { get; } = new();
+
+        public override IReadOnlyList<Value> Inputs => _inputs;
+
+        public override IReadOnlyList<Value> Outputs =>
+            [Result, OrderOutput!];
     }
 }

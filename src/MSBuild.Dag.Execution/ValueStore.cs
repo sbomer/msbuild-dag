@@ -4,6 +4,8 @@ namespace MSBuild.Dag.Execution;
 
 public sealed class ValueStore
 {
+    private static readonly object s_unavailable = new();
+
     private readonly Dictionary<Value, object?> _values =
         new(ReferenceEqualityComparer.Instance);
 
@@ -26,6 +28,11 @@ public sealed class ValueStore
             throw new InvalidOperationException("The value has not been assigned.");
         }
 
+        if (ReferenceEquals(result, s_unavailable))
+        {
+            throw new InvalidOperationException("The value is unavailable.");
+        }
+
         if (result is T typedResult)
         {
             return typedResult;
@@ -44,5 +51,23 @@ public sealed class ValueStore
     {
         ArgumentNullException.ThrowIfNull(value);
         return _values.ContainsKey(value);
+    }
+
+    public bool IsAvailable(Value value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+
+        return _values.TryGetValue(value, out var result) &&
+               !ReferenceEquals(result, s_unavailable);
+    }
+
+    internal void SetUnavailable(Value value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+
+        if (!_values.TryAdd(value, s_unavailable))
+        {
+            throw new InvalidOperationException("A value can only be assigned once.");
+        }
     }
 }

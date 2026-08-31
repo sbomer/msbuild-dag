@@ -1,4 +1,5 @@
 using Microsoft.Build.Exceptions;
+using MSBuild.Dag.Core;
 using MSBuild.Dag.Execution;
 using MSBuild.Dag.MSBuild;
 using MSBuild.Dag.Visualization;
@@ -9,16 +10,31 @@ internal static class CliRunner
 {
     public static async Task<int> RunAsync(string[] args)
     {
-        if (args.Length is < 1 or > 2)
+        var horizontal = args.Contains(
+            "--horizontal",
+            StringComparer.OrdinalIgnoreCase);
+        var positionalArguments = args
+            .Where(
+                argument => !argument.Equals(
+                    "--horizontal",
+                    StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        if (positionalArguments.Length is < 1 or > 2 ||
+            args.Any(
+                argument => argument.StartsWith('-') &&
+                    !argument.Equals(
+                        "--horizontal",
+                        StringComparison.OrdinalIgnoreCase)))
         {
             Console.Error.WriteLine(
-                "Usage: MSBuild.Dag.Cli <project-path> [target]");
+                "Usage: MSBuild.Dag.Cli <project-path> [target] [--horizontal]");
             return 1;
         }
 
-        var projectPath = Path.GetFullPath(args[0]);
-        var targetName = args.Length == 2
-            ? args[1]
+        var projectPath = Path.GetFullPath(positionalArguments[0]);
+        var targetName = positionalArguments.Length == 2
+            ? positionalArguments[1]
             : "Build";
 
         try
@@ -26,7 +42,14 @@ internal static class CliRunner
             var result = new MSBuildProjectTranslator()
                 .Translate(projectPath, targetName);
 
-            AsciiGraphWriter.Write(result.Graph, Console.Out);
+            if (horizontal)
+            {
+                AsciiGraphWriter.Write(result.Graph, Console.Out);
+            }
+            else
+            {
+                VerticalGraphWriter.Write(result.Graph, Console.Out);
+            }
 
             var values = new ValueStore();
 
@@ -81,19 +104,31 @@ internal static class CliRunner
         foreach (var property in result.Properties)
         {
             Console.WriteLine(
-                $"  $({property.Key}) = {values.Get(property.Value)}");
+                $"  $({property.Key}) = {Format(values, property.Value)}");
         }
 
         foreach (var item in result.Items)
         {
             Console.WriteLine(
-                $"  @({item.Key}) = {string.Join("; ", values.Get(item.Value))}");
+                $"  @({item.Key}) = {FormatItems(values, item.Value)}");
         }
 
         foreach (var condition in result.TargetConditions)
         {
             Console.WriteLine(
-                $"  Condition({condition.Key}) = {values.Get(condition.Value)}");
+                $"  Condition({condition.Key}) = {Format(values, condition.Value)}");
         }
     }
+
+    private static string Format<T>(ValueStore values, Value<T> value) =>
+        values.IsAvailable(value)
+            ? values.Get(value)?.ToString() ?? string.Empty
+            : "(unavailable)";
+
+    private static string FormatItems(
+        ValueStore values,
+        Value<IReadOnlyList<string>> value) =>
+        values.IsAvailable(value)
+            ? string.Join("; ", values.Get(value))
+            : "(unavailable)";
 }

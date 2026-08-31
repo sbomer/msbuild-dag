@@ -32,18 +32,25 @@ public static class AsciiGraphWriter
         var layout = Layout.Create(graph);
         var canvas = new Canvas(layout.Width, layout.Height);
 
+        DrawEdges(canvas, layout);
+
         foreach (var node in layout.Nodes)
         {
             DrawNode(canvas, node);
         }
 
-        DrawEdges(canvas, layout);
+        foreach (var edge in layout.Edges)
+        {
+            DrawEndpointJunctions(canvas, edge);
+            DrawPortLabels(canvas, edge);
+        }
+
         canvas.WriteTo(writer);
     }
 
     private static void DrawEdges(Canvas canvas, Layout layout)
     {
-        var longEdgeLane = layout.NodeHeight + 1;
+        var longEdgeLane = 0;
 
         foreach (var edge in layout.Edges)
         {
@@ -83,10 +90,22 @@ public static class AsciiGraphWriter
             canvas.DrawHorizontal(laneY, sourceX + 1, targetX - 1);
             canvas.DrawVertical(targetX - 1, laneY, targetY);
             canvas.DrawHorizontal(targetY, targetX - 1, targetX);
-            canvas.Overwrite(sourceX + 1, sourceY, '┐');
-            canvas.Overwrite(sourceX + 1, laneY, '└');
-            canvas.Overwrite(targetX - 1, laneY, '┘');
-            canvas.Overwrite(targetX - 1, targetY, '┌');
+            canvas.Overwrite(
+                sourceX + 1,
+                sourceY,
+                laneY > sourceY ? '┐' : '┘');
+            canvas.Overwrite(
+                sourceX + 1,
+                laneY,
+                laneY > sourceY ? '└' : '┌');
+            canvas.Overwrite(
+                targetX - 1,
+                laneY,
+                laneY > targetY ? '┘' : '┐');
+            canvas.Overwrite(
+                targetX - 1,
+                targetY,
+                laneY > targetY ? '┌' : '└');
             DrawEndpointJunctions(canvas, edge);
             canvas.Overwrite(targetX, targetY, '▶');
             DrawPortLabels(canvas, edge);
@@ -118,6 +137,7 @@ public static class AsciiGraphWriter
 
     private static void DrawNode(Canvas canvas, Node node)
     {
+        canvas.Clear(node.Left, node.Top, node.Right, node.Bottom);
         canvas.DrawHorizontal(node.Top, node.Left, node.Right);
         canvas.DrawHorizontal(node.Bottom, node.Left, node.Right);
         canvas.Set(node.Left, node.Top, '┌');
@@ -163,13 +183,20 @@ public static class AsciiGraphWriter
             for (var index = 0; index < graph.Operations.Count; index++)
             {
                 var operation = graph.Operations[index];
+                var hasVisibleOrderInput =
+                    HasVisibleOrderInput(graph, operation);
+                var hasVisibleOrderOutput =
+                    HasVisibleOrderOutput(graph, operation);
                 operationNodes.Add(
                     operation,
                     new Node(
                         $"[{index}] {GetTypeDisplayName(operation.GetType())}",
                         index,
-                        operation.Inputs.Count,
-                        operation.Outputs.Count));
+                        operation.Inputs.Count(IsDataValue),
+                        operation.Outputs.Count(IsDataValue),
+                        hasVisibleOrderInput,
+                        hasVisibleOrderOutput,
+                        hasVisibleOrderInput));
             }
 
             AssignOperationRanks(graph, operationNodes);
@@ -187,17 +214,29 @@ public static class AsciiGraphWriter
                 for (var inputIndex = 0; inputIndex < consumer.Inputs.Count; inputIndex++)
                 {
                     var input = consumer.Inputs[inputIndex];
+                    var isOrderEdge = IsOrderValue(input);
                     consumedValues.Add(input);
                     var producer = graph.GetProducer(input);
 
                     if (producer is not null)
                     {
+                        if (isOrderEdge &&
+                            HasDataDependency(producer, consumer))
+                        {
+                            continue;
+                        }
+
                         edges.Add(
                             new Edge(
                                 operationNodes[producer],
                                 consumerNode,
-                                IndexOfReference(producer.Outputs, input),
-                                inputIndex));
+                                isOrderEdge
+                                    ? null
+                                    : IndexOfDataReference(producer.Outputs, input),
+                                isOrderEdge
+                                    ? null
+                                    : IndexOfDataReference(consumer.Inputs, input),
+                                isOrderEdge));
                         continue;
                     }
 
@@ -215,7 +254,13 @@ public static class AsciiGraphWriter
                         nodes.Add(externalNode);
                     }
 
-                    edges.Add(new Edge(externalNode, consumerNode, null, inputIndex));
+                    edges.Add(
+                        new Edge(
+                            externalNode,
+                            consumerNode,
+                            null,
+                            IndexOfDataReference(consumer.Inputs, input),
+                            IsOrderEdge: false));
                 }
             }
 
@@ -225,7 +270,10 @@ public static class AsciiGraphWriter
 
                 for (var outputIndex = 0; outputIndex < operation.Outputs.Count; outputIndex++)
                 {
-                    if (consumedValues.Contains(operation.Outputs[outputIndex]))
+                    var output = operation.Outputs[outputIndex];
+
+                    if (consumedValues.Contains(output) ||
+                        output is Value<OrderToken>)
                     {
                         continue;
                     }
@@ -240,7 +288,13 @@ public static class AsciiGraphWriter
                     };
 
                     nodes.Add(outputNode);
-                    edges.Add(new Edge(producerNode, outputNode, outputIndex, null));
+                    edges.Add(
+                        new Edge(
+                            producerNode,
+                            outputNode,
+                            IndexOfDataReference(operation.Outputs, output),
+                            null,
+                            IsOrderEdge: false));
                 }
             }
 
@@ -248,14 +302,72 @@ public static class AsciiGraphWriter
             MoveNodesTowardConsumers(nodes, edges);
             PositionNodes(nodes, edges);
 
-            var width = nodes.Max(node => node.Right) + 1;
-            var nodeHeight = nodes.Max(node => node.Bottom) + 1;
             var longEdgeCount = edges.Count(
                 edge => edge.Target.Rank > edge.Source.Rank + 1);
-            var height = nodeHeight + (longEdgeCount * 2) + 1;
+
+            if (longEdgeCount > 0)
+            {
+                var nodeOffset = longEdgeCount * 2;
+
+                foreach (var node in nodes)
+                {
+                    node.Top += nodeOffset;
+                }
+            }
+
+            var width = nodes.Max(node => node.Right) + 1;
+            var nodeHeight = nodes.Max(node => node.Bottom) + 1;
+            var height = nodeHeight + 1;
 
             return new Layout(nodes, edges, width, height, nodeHeight);
         }
+
+        private static bool HasVisibleOrderInput(
+            BuildGraph graph,
+            Operation consumer)
+        {
+            foreach (var input in consumer.Inputs.Where(IsOrderValue))
+            {
+                var producer = graph.GetProducer(input);
+
+                if (producer is null ||
+                    !HasDataDependency(producer, consumer))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool HasVisibleOrderOutput(
+            BuildGraph graph,
+            Operation producer)
+        {
+            foreach (var output in producer.Outputs.Where(IsOrderValue))
+            {
+                foreach (var consumer in graph.Operations)
+                {
+                    if (consumer.Inputs.Any(
+                            input => ReferenceEquals(input, output)) &&
+                        !HasDataDependency(producer, consumer))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private static bool HasDataDependency(
+            Operation producer,
+            Operation consumer) =>
+            producer.Outputs
+                .Where(IsDataValue)
+                .Any(
+                    output => consumer.Inputs.Any(
+                        input => ReferenceEquals(input, output)));
 
         private static void MoveNodesTowardConsumers(
             IReadOnlyList<Node> nodes,
@@ -263,6 +375,11 @@ public static class AsciiGraphWriter
         {
             foreach (var node in nodes.OrderByDescending(node => node.Rank))
             {
+                if (node.PinnedRank)
+                {
+                    continue;
+                }
+
                 var outgoingEdges = edges
                     .Where(edge => ReferenceEquals(edge.Source, node))
                     .ToArray();
@@ -293,15 +410,22 @@ public static class AsciiGraphWriter
             return genericMarker < 0 ? name : name[..genericMarker];
         }
 
-        private static int IndexOfReference(
+        private static int IndexOfDataReference(
             IReadOnlyList<Value> values,
             Value expected)
         {
+            var dataIndex = 0;
+
             for (var index = 0; index < values.Count; index++)
             {
                 if (ReferenceEquals(values[index], expected))
                 {
-                    return index;
+                    return dataIndex;
+                }
+
+                if (IsDataValue(values[index]))
+                {
+                    dataIndex++;
                 }
             }
 
@@ -465,11 +589,19 @@ public static class AsciiGraphWriter
         string label,
         int order,
         int inputCount,
-        int outputCount)
+        int outputCount,
+        bool hasOrderInput = false,
+        bool hasOrderOutput = false,
+        bool pinnedRank = false)
     {
         public string Label { get; } = label;
 
         public int Order { get; } = order;
+
+        public bool PinnedRank { get; } = pinnedRank;
+
+        public bool HasOrderPort { get; } =
+            hasOrderInput || hasOrderOutput;
 
         public int Rank { get; set; }
 
@@ -479,11 +611,14 @@ public static class AsciiGraphWriter
 
         public int Width => Label.Length + 4;
 
-        public int Height => Math.Max(1, Math.Max(inputCount, outputCount)) + 2;
+        private int DataRowCount =>
+            Math.Max(1, Math.Max(inputCount, outputCount));
+
+        public int Height => DataRowCount + 2 + (HasOrderPort ? 1 : 0);
 
         public int Right => Left + Width - 1;
 
-        public int CenterY => Top + (Height / 2);
+        public int CenterY => Top + 1 + ((DataRowCount - 1) / 2);
 
         public int Bottom => Top + Height - 1;
 
@@ -492,24 +627,36 @@ public static class AsciiGraphWriter
         public int GetInputY(int index) => Top + index + 1;
 
         public int GetOutputY(int index) => Top + index + 1;
+
+        public int GetOrderY() => Bottom - 1;
     }
 
     private sealed record Edge(
         Node Source,
         Node Target,
         int? SourcePort,
-        int? TargetPort)
+        int? TargetPort,
+        bool IsOrderEdge)
     {
         public int SourceY =>
-            SourcePort is int sourcePort
+            IsOrderEdge
+                ? Source.GetOrderY()
+                : SourcePort is int sourcePort
                 ? Source.GetOutputY(sourcePort)
                 : Source.CenterY;
 
         public int TargetY =>
-            TargetPort is int targetPort
+            IsOrderEdge
+                ? Target.GetOrderY()
+                : TargetPort is int targetPort
                 ? Target.GetInputY(targetPort)
                 : Target.CenterY;
     }
+
+    private static bool IsDataValue(Value value) => !IsOrderValue(value);
+
+    private static bool IsOrderValue(Value value) =>
+        value is Value<OrderToken>;
 
     private sealed class Canvas
     {
@@ -567,6 +714,17 @@ public static class AsciiGraphWriter
         public void Overwrite(int x, int y, char character)
         {
             _characters[y, x] = character;
+        }
+
+        public void Clear(int left, int top, int right, int bottom)
+        {
+            for (var y = top; y <= bottom; y++)
+            {
+                for (var x = left; x <= right; x++)
+                {
+                    _characters[y, x] = '\0';
+                }
+            }
         }
 
         public void WriteTo(TextWriter writer)
