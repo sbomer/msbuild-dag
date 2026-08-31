@@ -45,10 +45,13 @@ public sealed class BuildGraphExecutor
             }
 
             var shouldSkip = operation.Inputs.Any(
-                input =>
-                    !values.IsAvailable(input) ||
-                    input is Value<OrderToken> orderToken &&
-                    !values.Get(orderToken).IsActive);
+                input => !values.IsAvailable(input));
+
+            if (!shouldSkip &&
+                operation is IGuardedOperation { Guard: not null } guardedOperation)
+            {
+                shouldSkip = !values.Get(guardedOperation.Guard).IsActive;
+            }
 
             if (shouldSkip)
             {
@@ -65,13 +68,14 @@ public sealed class BuildGraphExecutor
 
             if (operation is IOrderedOperation
                 {
-                    OrderInput: not null,
                     OrderOutput: not null,
                 } orderedOperation)
             {
                 values.Set(
                     orderedOperation.OrderOutput,
-                    values.Get(orderedOperation.OrderInput));
+                    orderedOperation.OrderInput is null
+                        ? new OrderToken()
+                        : values.Get(orderedOperation.OrderInput));
             }
 
             foreach (var output in operation.Outputs)

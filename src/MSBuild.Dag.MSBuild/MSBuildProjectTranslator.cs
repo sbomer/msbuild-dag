@@ -30,17 +30,21 @@ public sealed class MSBuildProjectTranslator
 
         var context = new TranslationContext(projectInstance);
 
+        Value<GuardToken>? targetGuard = null;
+
         if (!string.IsNullOrWhiteSpace(target.Condition))
         {
             var condition = context.TranslateCondition(target.Condition);
             context.TargetConditions[targetName] = condition;
-            context.GateFollowingOperations(condition);
+            targetGuard = context.CreateGuard(condition);
         }
 
         if (!string.IsNullOrWhiteSpace(target.DependsOnTargets))
         {
             throw Unsupported("DependsOnTargets");
         }
+
+        context.BeginTarget(targetGuard);
 
         foreach (var child in target.Children)
         {
@@ -126,7 +130,7 @@ public sealed class MSBuildProjectTranslator
             var concat = new ConcatItemsOperation(
                 existingItems,
                 appendedItems,
-                context.CurrentOrderToken);
+                context.CreateControl());
 
             context.AddOperation(concat);
             context.Items[item.ItemType] = concat.Result;
@@ -155,7 +159,7 @@ public sealed class MSBuildProjectTranslator
         var compile = new ToyCompileOperation(
             sources,
             configuration,
-            context.CurrentOrderToken);
+            context.CreateControl());
 
         context.AddOperation(compile);
 
@@ -206,7 +210,23 @@ public sealed class MSBuildProjectTranslator
 
         public Value<OrderToken>? CurrentOrderToken { get; private set; }
 
+        private Value<GuardToken>? TargetGuard { get; set; }
+
+        private bool IsTranslatingTarget { get; set; }
+
         public List<DagOperation> Operations { get; } = [];
+
+        public void BeginTarget(Value<GuardToken>? guard)
+        {
+            TargetGuard = guard;
+            CurrentOrderToken = null;
+            IsTranslatingTarget = true;
+        }
+
+        public OperationControl CreateControl() =>
+            new(
+                CurrentOrderToken is null ? TargetGuard : null,
+                CurrentOrderToken);
 
         public void AddOperation(DagOperation operation, bool ordered = true)
         {
@@ -219,11 +239,11 @@ public sealed class MSBuildProjectTranslator
             }
         }
 
-        public void GateFollowingOperations(Value<bool> condition)
+        public Value<GuardToken> CreateGuard(Value<bool> condition)
         {
-            var gate = new ConditionGateOperation(condition);
-            Operations.Add(gate);
-            CurrentOrderToken = gate.Result;
+            var guard = new ConditionGuardOperation(condition);
+            Operations.Add(guard);
+            return guard.Result;
         }
 
         public Value<bool> TranslateCondition(string expression)
@@ -325,8 +345,10 @@ public sealed class MSBuildProjectTranslator
         {
             var operation = new ConstantOperation<T>(
                 content,
-                ordered ? CurrentOrderToken : null);
-            AddOperation(operation, ordered);
+                ordered && IsTranslatingTarget
+                    ? CreateControl()
+                    : null);
+            AddOperation(operation, ordered && IsTranslatingTarget);
             return operation.Result;
         }
 

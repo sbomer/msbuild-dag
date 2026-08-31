@@ -19,11 +19,14 @@ public sealed class MSBuildProjectTranslatorTests
         var concat = Assert.Single(result.Graph.Operations.OfType<ConcatItemsOperation>());
         var condition = Assert.Single(
             result.Graph.Operations.OfType<EqualOperation<string>>());
+        var guard = Assert.Single(
+            result.Graph.Operations.OfType<ConditionGuardOperation>());
 
         Assert.Same(concat.Result, compile.Sources);
         Assert.Same(compile.Assembly, result.Properties["AssemblyPath"]);
         Assert.Same(concat.Result, result.Items["Compile"]);
         Assert.Same(condition.Result, result.TargetConditions["Build"]);
+        Assert.Same(condition.Result, guard.Condition);
 
         Assert.Contains(
             result.Graph.GetDependencies(compile),
@@ -35,15 +38,29 @@ public sealed class MSBuildProjectTranslatorTests
             operation => operation.Content == "Debug");
         Assert.Contains(
             result.Graph.GetDependencies(configuration),
-            operation => operation is ConditionGateOperation);
+            operation => operation is ConditionGuardOperation);
+        Assert.Same(guard.Result, configuration.Guard);
+        Assert.Null(configuration.OrderInput);
+        Assert.Same(configuration.OrderOutput, configuration.Outputs[0]);
+        Assert.Same(configuration.Result, configuration.Outputs[1]);
 
-        var itemConstants = result.Graph.Operations
-            .OfType<ConstantOperation<IReadOnlyList<string>>>()
-            .ToArray();
-
-        Assert.Contains(
-            itemConstants,
+        var appendedItems = Assert.Single(
+            result.Graph.Operations
+                .OfType<ConstantOperation<IReadOnlyList<string>>>(),
             operation => operation.Content.SequenceEqual(["Program.cs"]));
+
+        Assert.Null(appendedItems.Guard);
+        Assert.Same(configuration.OrderOutput, appendedItems.OrderInput);
+        Assert.Same(
+            appendedItems.OrderInput,
+            appendedItems.Inputs[0]);
+        Assert.Same(appendedItems.OrderOutput, appendedItems.Outputs[0]);
+        Assert.Same(appendedItems.Result, appendedItems.Outputs[1]);
+
+        Assert.NotNull(compile.OrderInput);
+        Assert.Same(compile.OrderInput, compile.Inputs[0]);
+        Assert.Same(compile.OrderOutput, compile.Outputs[0]);
+        Assert.Same(compile.Assembly, compile.Outputs[1]);
     }
 
     [Fact]
@@ -109,12 +126,12 @@ public sealed class MSBuildProjectTranslatorTests
                             values.Get(operation.Right)));
                     return ValueTask.CompletedTask;
                 })
-            .Add<ConditionGateOperation>(
+            .Add<ConditionGuardOperation>(
                 static (operation, values, _) =>
                 {
                     values.Set(
                         operation.Result,
-                        new OrderToken(values.Get(operation.Condition)));
+                        new GuardToken(values.Get(operation.Condition)));
                     return ValueTask.CompletedTask;
                 })
             .Add<ConcatItemsOperation>(

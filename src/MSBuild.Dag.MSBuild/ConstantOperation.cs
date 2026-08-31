@@ -4,20 +4,33 @@ namespace MSBuild.Dag.MSBuild;
 
 public sealed class ConstantOperation<T>(
     T content,
-    Value<OrderToken>? orderToken = null) : Operation, IOrderedOperation
+    OperationControl? control = null)
+    : Operation, IGuardedOperation, IOrderedOperation
 {
     public T Content { get; } = content;
 
-    public Value<OrderToken>? OrderInput { get; } = orderToken;
+    public Value<GuardToken>? Guard => control?.Guard;
 
-    public Value<OrderToken>? OrderOutput { get; } =
-        orderToken is null ? null : new();
+    public Value<OrderToken>? OrderInput => control?.OrderInput;
+
+    public Value<OrderToken>? OrderOutput => control?.OrderOutput;
 
     public Value<T> Result { get; } = new();
 
-    public override IReadOnlyList<Value> Inputs { get; } =
-        orderToken is null ? [] : [orderToken];
+    public override IReadOnlyList<Value> Inputs =>
+        CreateInputs(Guard, OrderInput);
+
+    private static IReadOnlyList<Value> CreateInputs(
+        Value<GuardToken>? guard,
+        Value<OrderToken>? orderInput) =>
+        (guard, orderInput) switch
+        {
+            (not null, not null) => [orderInput, guard],
+            (not null, null) => [guard],
+            (null, not null) => [orderInput],
+            _ => [],
+        };
 
     public override IReadOnlyList<Value> Outputs =>
-        OrderOutput is null ? [Result] : [Result, OrderOutput];
+        OrderOutput is null ? [Result] : [OrderOutput, Result];
 }

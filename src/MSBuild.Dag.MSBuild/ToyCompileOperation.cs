@@ -5,24 +5,31 @@ namespace MSBuild.Dag.MSBuild;
 public sealed class ToyCompileOperation(
     Value<IReadOnlyList<string>> sources,
     Value<string> configuration,
-    Value<OrderToken>? orderToken = null) : Operation, IOrderedOperation
+    OperationControl? control = null)
+    : Operation, IGuardedOperation, IOrderedOperation
 {
     public Value<IReadOnlyList<string>> Sources { get; } = sources;
 
     public Value<string> Configuration { get; } = configuration;
 
-    public Value<OrderToken>? OrderInput { get; } = orderToken;
+    public Value<GuardToken>? Guard => control?.Guard;
 
-    public Value<OrderToken>? OrderOutput { get; } =
-        orderToken is null ? null : new();
+    public Value<OrderToken>? OrderInput => control?.OrderInput;
+
+    public Value<OrderToken>? OrderOutput => control?.OrderOutput;
 
     public Value<string> Assembly { get; } = new();
 
-    public override IReadOnlyList<Value> Inputs { get; } =
-        orderToken is null
-            ? [sources, configuration]
-            : [sources, configuration, orderToken];
+    public override IReadOnlyList<Value> Inputs =>
+        (Guard, OrderInput) switch
+        {
+            (not null, not null) =>
+                [OrderInput, Guard, Sources, Configuration],
+            (not null, null) => [Guard, Sources, Configuration],
+            (null, not null) => [OrderInput, Sources, Configuration],
+            _ => [Sources, Configuration],
+        };
 
     public override IReadOnlyList<Value> Outputs =>
-        OrderOutput is null ? [Assembly] : [Assembly, OrderOutput];
+        OrderOutput is null ? [Assembly] : [OrderOutput, Assembly];
 }

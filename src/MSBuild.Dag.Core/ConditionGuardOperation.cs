@@ -1,10 +1,10 @@
 namespace MSBuild.Dag.Core;
 
-public sealed class ConditionGateOperation(Value<bool> condition) : Operation
+public sealed class ConditionGuardOperation(Value<bool> condition) : Operation
 {
     public Value<bool> Condition { get; } = condition;
 
-    public Value<OrderToken> Result { get; } = new();
+    public Value<GuardToken> Result { get; } = new();
 
     public override IReadOnlyList<Value> Inputs => [Condition];
 

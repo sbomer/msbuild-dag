@@ -88,13 +88,13 @@ public sealed class BuildGraphExecutorTests
     }
 
     [Fact]
-    public async Task InactiveOrderTokenSkipsOperation()
+    public async Task InactiveGuardSkipsOperation()
     {
-        var orderToken = new Value<OrderToken>();
-        var operation = new OrderedSourceOperation(orderToken);
+        var guard = new Value<GuardToken>();
+        var operation = new GuardedSourceOperation(guard);
         var graph = new BuildGraph([operation]);
         var values = new ValueStore();
-        values.Set(orderToken, new OrderToken(IsActive: false));
+        values.Set(guard, new GuardToken(IsActive: false));
         var executed = false;
 
         await new BuildGraphExecutor().ExecuteAsync(
@@ -109,6 +109,27 @@ public sealed class BuildGraphExecutorTests
         Assert.False(executed);
         Assert.True(values.Contains(operation.Result));
         Assert.False(values.IsAvailable(operation.Result));
+    }
+
+    [Fact]
+    public async Task FirstOrderedOperationSynthesizesOrderToken()
+    {
+        var operation = new OrderedSourceOperation();
+        var graph = new BuildGraph([operation]);
+        var values = new ValueStore();
+
+        await new BuildGraphExecutor().ExecuteAsync(
+            graph,
+            values,
+            static (candidate, store, _) =>
+            {
+                var source = (OrderedSourceOperation)candidate;
+                store.Set(source.Result, 42);
+                return ValueTask.CompletedTask;
+            });
+
+        Assert.Equal(42, values.Get(operation.Result));
+        Assert.Equal(new OrderToken(), values.Get(operation.OrderOutput!));
     }
 
     private sealed class SourceOperation : Operation
@@ -131,21 +152,33 @@ public sealed class BuildGraphExecutorTests
         public override IReadOnlyList<Value> Outputs => [Result];
     }
 
-    private sealed class OrderedSourceOperation : Operation, IOrderedOperation
+    private sealed class GuardedSourceOperation : Operation, IGuardedOperation
     {
-        public OrderedSourceOperation(Value<OrderToken> orderToken)
+        public GuardedSourceOperation(Value<GuardToken> guard)
         {
-            OrderInput = orderToken;
+            Guard = guard;
         }
 
         public Value<int> Result { get; } = new();
 
-        public Value<OrderToken>? OrderInput { get; }
+        public Value<GuardToken>? Guard { get; }
+
+        public override IReadOnlyList<Value> Inputs => [Guard!];
+
+        public override IReadOnlyList<Value> Outputs => [Result];
+    }
+
+    private sealed class OrderedSourceOperation : Operation, IOrderedOperation
+    {
+        public Value<int> Result { get; } = new();
+
+        public Value<OrderToken>? OrderInput => null;
 
         public Value<OrderToken>? OrderOutput { get; } = new();
 
-        public override IReadOnlyList<Value> Inputs => [OrderInput!];
+        public override IReadOnlyList<Value> Inputs => [];
 
-        public override IReadOnlyList<Value> Outputs => [Result, OrderOutput!];
+        public override IReadOnlyList<Value> Outputs =>
+            [Result, OrderOutput!];
     }
 }

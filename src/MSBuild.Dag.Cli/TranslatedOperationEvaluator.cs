@@ -67,12 +67,12 @@ internal static class TranslatedOperationEvaluator
                         !values.Get(operation.Operand));
                     return ValueTask.CompletedTask;
                 })
-            .Add<ConditionGateOperation>(
+            .Add<ConditionGuardOperation>(
                 static (operation, values, _) =>
                 {
                     values.Set(
                         operation.Result,
-                        new OrderToken(values.Get(operation.Condition)));
+                        new GuardToken(values.Get(operation.Condition)));
                     return ValueTask.CompletedTask;
                 });
 
