@@ -1,6 +1,8 @@
 <Project>
   <PropertyGroup>
     <RunBuild>true</RunBuild>
+    <RunSkippedBuild>false</RunSkippedBuild>
+    <Configuration>Release</Configuration>
   </PropertyGroup>
 
   <Target Name="Build"
@@ -18,5 +20,19 @@
       <Output TaskParameter="Assembly"
               PropertyName="AssemblyPath" />
     </ToyCompile>
+  </Target>
+
+  <Target Name="SkippedBuild"
+          Condition="'$(RunSkippedBuild)' == 'true'">
+    <PropertyGroup>
+      <Configuration>ShouldNotBeObserved</Configuration>
+    </PropertyGroup>
+  </Target>
+
+  <Target Name="AfterSkippedBuild"
+          DependsOnTargets="SkippedBuild">
+    <PropertyGroup>
+      <ObservedConfiguration>$(Configuration)</ObservedConfiguration>
+    </PropertyGroup>
   </Target>
 </Project>

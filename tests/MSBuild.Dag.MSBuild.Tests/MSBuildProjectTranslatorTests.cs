@@ -103,7 +103,45 @@ public sealed class MSBuildProjectTranslatorTests
             "ConditionFalse.proj");
         var result = new MSBuildProjectTranslator().Translate(projectPath, "Build");
         var compileExecuted = false;
-        var evaluator = new OperationEvaluator()
+        var evaluator = CreateEvaluator(
+            _ => compileExecuted = true);
+        var values = new ValueStore();
+
+        await new BuildGraphExecutor().ExecuteAsync(
+            result.Graph,
+            values,
+            evaluator.EvaluateAsync);
+
+        Assert.False(values.Get(result.TargetConditions["Build"]));
+        Assert.False(compileExecuted);
+    }
+
+    [Fact(
+        Skip = "Multi-target lowering and post-condition state merges are not yet implemented.")]
+    public async Task SkippedTargetPreservesPriorPropertyForFollowingTarget()
+    {
+        var projectPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "TestAssets",
+            "ToyBuild.proj");
+        var result = new MSBuildProjectTranslator()
+            .Translate(projectPath, "AfterSkippedBuild");
+        var values = new ValueStore();
+        var evaluator = CreateEvaluator();
+
+        await new BuildGraphExecutor().ExecuteAsync(
+            result.Graph,
+            values,
+            evaluator.EvaluateAsync);
+
+        Assert.Equal(
+            "Release",
+            values.Get(result.Properties["ObservedConfiguration"]));
+    }
+
+    private static OperationEvaluator CreateEvaluator(
+        Action<ToyCompileOperation>? onCompile = null) =>
+        new OperationEvaluator()
             .Add<ConstantOperation<string>>(
                 static (operation, values, _) =>
                 {
@@ -147,18 +185,8 @@ public sealed class MSBuildProjectTranslatorTests
             .Add<ToyCompileOperation>(
                 (operation, values, _) =>
                 {
-                    compileExecuted = true;
+                    onCompile?.Invoke(operation);
                     values.Set(operation.Assembly, "App.dll");
                     return ValueTask.CompletedTask;
                 });
-        var values = new ValueStore();
-
-        await new BuildGraphExecutor().ExecuteAsync(
-            result.Graph,
-            values,
-            evaluator.EvaluateAsync);
-
-        Assert.False(values.Get(result.TargetConditions["Build"]));
-        Assert.False(compileExecuted);
-    }
 }
