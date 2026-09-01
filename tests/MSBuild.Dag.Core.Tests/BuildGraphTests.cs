@@ -1,6 +1,6 @@
 namespace MSBuild.Dag.Core.Tests;
 
-public sealed class BuildGraphTests
+public sealed class OperationGraphTests
 {
     [Fact]
     public void DerivesDependencyThroughPropertyValue()
@@ -8,7 +8,7 @@ public sealed class BuildGraphTests
         var task = new TestOperation([], [new Value<string>()]);
         var consumer = new TestOperation([task.Outputs[0]], [new Value()]);
 
-        var graph = new BuildGraph([task, consumer]);
+        var graph = new OperationGraph([task, consumer]);
 
         Assert.Same(task, graph.GetProducer(task.Outputs[0]));
         Assert.Equal([task], graph.GetDependencies(consumer));
@@ -28,7 +28,7 @@ public sealed class BuildGraphTests
             [concatenatedItems.Outputs[0]],
             [new Value()]);
 
-        var graph = new BuildGraph([generatedItems, concatenatedItems, compile]);
+        var graph = new OperationGraph([generatedItems, concatenatedItems, compile]);
 
         Assert.Equal([generatedItems], graph.GetDependencies(concatenatedItems));
         Assert.Equal([concatenatedItems], graph.GetDependencies(compile));
@@ -41,7 +41,7 @@ public sealed class BuildGraphTests
         var producer = new TestOperation([], [new Value(), new Value()]);
         var consumer = new TestOperation(producer.Outputs, [new Value()]);
 
-        var graph = new BuildGraph([producer, consumer]);
+        var graph = new OperationGraph([producer, consumer]);
 
         Assert.Equal([producer], graph.GetDependencies(consumer));
     }
@@ -54,7 +54,7 @@ public sealed class BuildGraphTests
         var second = new TestOperation([], [sharedOutput]);
 
         var exception = Assert.Throws<ArgumentException>(
-            () => new BuildGraph([first, second]));
+            () => new OperationGraph([first, second]));
 
         Assert.Contains("multiple producers", exception.Message);
     }
@@ -68,7 +68,7 @@ public sealed class BuildGraphTests
         var second = new TestOperation([firstOutput], [secondOutput]);
 
         var exception = Assert.Throws<ArgumentException>(
-            () => new BuildGraph([first, second]));
+            () => new OperationGraph([first, second]));
 
         Assert.Contains("acyclic", exception.Message);
     }

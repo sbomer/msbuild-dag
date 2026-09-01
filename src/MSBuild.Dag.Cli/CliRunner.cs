@@ -10,31 +10,17 @@ internal static class CliRunner
 {
     public static async Task<int> RunAsync(string[] args)
     {
-        var horizontal = args.Contains(
-            "--horizontal",
-            StringComparer.OrdinalIgnoreCase);
-        var positionalArguments = args
-            .Where(
-                argument => !argument.Equals(
-                    "--horizontal",
-                    StringComparison.OrdinalIgnoreCase))
-            .ToArray();
-
-        if (positionalArguments.Length is < 1 or > 2 ||
-            args.Any(
-                argument => argument.StartsWith('-') &&
-                    !argument.Equals(
-                        "--horizontal",
-                        StringComparison.OrdinalIgnoreCase)))
+        if (args.Length is < 1 or > 2 ||
+            args.Any(argument => argument.StartsWith('-')))
         {
             Console.Error.WriteLine(
-                "Usage: MSBuild.Dag.Cli <project-path> [target] [--horizontal]");
+                "Usage: MSBuild.Dag.Cli <project-path> [target]");
             return 1;
         }
 
-        var projectPath = Path.GetFullPath(positionalArguments[0]);
-        var targetName = positionalArguments.Length == 2
-            ? positionalArguments[1]
+        var projectPath = Path.GetFullPath(args[0]);
+        var targetName = args.Length == 2
+            ? args[1]
             : "Build";
 
         try
@@ -42,18 +28,11 @@ internal static class CliRunner
             var result = new MSBuildProjectTranslator()
                 .Translate(projectPath, targetName);
 
-            if (horizontal)
-            {
-                AsciiGraphWriter.Write(result.Graph, Console.Out);
-            }
-            else
-            {
-                VerticalGraphWriter.Write(result.Graph, Console.Out);
-            }
+            AsciiGraphWriter.Write(result.Graph, Console.Out);
 
             var values = new ValueStore();
 
-            await new BuildGraphExecutor().ExecuteAsync(
+            await new OperationGraphExecutor().ExecuteAsync(
                 result.Graph,
                 values,
                 TranslatedOperationEvaluator.EvaluateAsync);

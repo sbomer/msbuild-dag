@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/samples/">
     <Project Path="samples/MSBuild.Dag.Sample/MSBuild.Dag.Sample.csproj" />
+    <Project Path="samples/MSBuild.Dag.TargetSample/MSBuild.Dag.TargetSample.csproj" />
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/MSBuild.Dag.Cli/MSBuild.Dag.Cli.csproj" />

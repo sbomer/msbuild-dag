@@ -6,22 +6,116 @@ namespace MSBuild.Dag.Visualization;
 
 public static class AsciiGraphWriter
 {
-    private const int HorizontalGap = 8;
-    private const int VerticalGap = 2;
+    private const int HorizontalGap = 10;
 
-    public static string Render(BuildGraph graph)
+    public static string Render(OperationGraph graph)
     {
-        using var writer = new StringWriter(CultureInfo.InvariantCulture);
-        Write(graph, writer);
-        return writer.ToString();
+        return Render(
+            graph,
+            "OperationGraph",
+            labelProvider: null,
+            contentProvider: null);
     }
 
-    public static void Write(BuildGraph graph, TextWriter writer)
+    public static string Render(
+        BuildGraph graph,
+        IReadOnlyDictionary<Target, string>? targetNames = null)
+    {
+        ArgumentNullException.ThrowIfNull(graph);
+
+        var adapter = BuildGraphRenderingAdapter.Create(graph, targetNames);
+        return Render(
+            adapter.Graph,
+            "BuildGraph",
+            adapter.GetLabel,
+            contentProvider: null);
+    }
+
+    public static string RenderExpanded(
+        BuildGraph graph,
+        IReadOnlyDictionary<Target, string>? targetNames = null)
+    {
+        ArgumentNullException.ThrowIfNull(graph);
+
+        var adapter = BuildGraphRenderingAdapter.Create(
+            graph,
+            targetNames,
+            includeTargetBodies: true);
+        return Render(
+            adapter.Graph,
+            "BuildGraph",
+            adapter.GetLabel,
+            adapter.GetContent);
+    }
+
+    public static void Write(OperationGraph graph, TextWriter writer)
+    {
+        Write(
+            graph,
+            writer,
+            "OperationGraph",
+            labelProvider: null,
+            contentProvider: null);
+    }
+
+    public static void Write(
+        BuildGraph graph,
+        TextWriter writer,
+        IReadOnlyDictionary<Target, string>? targetNames = null)
+    {
+        ArgumentNullException.ThrowIfNull(graph);
+
+        var adapter = BuildGraphRenderingAdapter.Create(graph, targetNames);
+        Write(
+            adapter.Graph,
+            writer,
+            "BuildGraph",
+            adapter.GetLabel,
+            contentProvider: null);
+    }
+
+    public static void WriteExpanded(
+        BuildGraph graph,
+        TextWriter writer,
+        IReadOnlyDictionary<Target, string>? targetNames = null)
     {
         ArgumentNullException.ThrowIfNull(graph);
         ArgumentNullException.ThrowIfNull(writer);
 
-        writer.WriteLine("BuildGraph");
+        var adapter = BuildGraphRenderingAdapter.Create(
+            graph,
+            targetNames,
+            includeTargetBodies: true);
+        Write(
+            adapter.Graph,
+            writer,
+            "BuildGraph",
+            adapter.GetLabel,
+            adapter.GetContent);
+    }
+
+    private static string Render(
+        OperationGraph graph,
+        string heading,
+        Func<Operation, string>? labelProvider,
+        Func<Operation, IReadOnlyList<string>?>? contentProvider)
+    {
+        using var writer = new StringWriter(CultureInfo.InvariantCulture);
+        Write(graph, writer, heading, labelProvider, contentProvider);
+        return writer.ToString();
+    }
+
+    private static void Write(
+        OperationGraph graph,
+        TextWriter writer,
+        string heading,
+        Func<Operation, string>? labelProvider,
+        Func<Operation, IReadOnlyList<string>?>? contentProvider)
+    {
+        ArgumentNullException.ThrowIfNull(graph);
+        ArgumentNullException.ThrowIfNull(writer);
+
+        writer.WriteLine(heading);
 
         if (graph.Operations.Count == 0)
         {
@@ -29,10 +123,13 @@ public static class AsciiGraphWriter
             return;
         }
 
-        var layout = Layout.Create(graph);
+        var layout = Layout.Create(graph, labelProvider, contentProvider);
         var canvas = new Canvas(layout.Width, layout.Height);
 
-        DrawEdges(canvas, layout);
+        foreach (var edge in layout.Edges)
+        {
+            DrawEdge(canvas, edge);
+        }
 
         foreach (var node in layout.Nodes)
         {
@@ -41,146 +138,129 @@ public static class AsciiGraphWriter
 
         foreach (var edge in layout.Edges)
         {
-            DrawEndpointJunctions(canvas, edge);
-            DrawPortLabels(canvas, edge);
+            DrawEdgeEndpoints(canvas, edge);
         }
 
         canvas.WriteTo(writer);
     }
 
-    private static void DrawEdges(Canvas canvas, Layout layout)
+    private static void DrawEdge(Canvas canvas, Edge edge)
     {
-        var longEdgeLane = 0;
+        var sourceX = edge.Source.GetOutputX(edge.SourceSlot);
+        var sourceY = edge.Source.Bottom;
+        var targetX = edge.Target.GetInputX(edge.TargetSlot);
+        var targetY = edge.Target.Top;
+        var firstRouteY = sourceY + 2;
+        var lastRouteY = targetY - 2;
+        var horizontalStroke = edge.IsOrderEdge ? '╌' : '─';
+        var verticalStroke = edge.IsOrderEdge ? '╎' : '│';
 
-        foreach (var edge in layout.Edges)
+        canvas.DrawVertical(sourceX, sourceY, firstRouteY, verticalStroke);
+        canvas.DrawVertical(targetX, lastRouteY, targetY, verticalStroke);
+
+        if (edge.LaneX is int laneX)
         {
-            var sourceX = edge.Source.Right + 1;
-            var sourceY = edge.SourceY;
-            var targetX = edge.Target.Left - 1;
-            var targetY = edge.TargetY;
-            var horizontalStroke = edge.IsOrderEdge ? '╌' : '─';
-            var verticalStroke = edge.IsOrderEdge ? '╎' : '│';
-
-            if (sourceY == targetY)
-            {
-                canvas.DrawHorizontal(
-                    sourceY,
-                    sourceX,
-                    targetX,
-                    horizontalStroke);
-                DrawEndpointJunctions(canvas, edge);
-                canvas.Overwrite(targetX, targetY, '▶');
-                DrawPortLabels(canvas, edge);
-                continue;
-            }
-
-            if (edge.Target.Rank == edge.Source.Rank + 1)
-            {
-                var routeX = sourceX + ((targetX - sourceX) / 2);
-                canvas.DrawHorizontal(
-                    sourceY,
-                    sourceX,
-                    routeX,
-                    horizontalStroke);
-                canvas.DrawVertical(
-                    routeX,
-                    sourceY,
-                    targetY,
-                    verticalStroke);
-                canvas.DrawHorizontal(
-                    targetY,
-                    routeX,
-                    targetX,
-                    horizontalStroke);
-                canvas.Overwrite(routeX, sourceY, targetY > sourceY ? '┐' : '┘');
-                canvas.Overwrite(routeX, targetY, targetY > sourceY ? '└' : '┌');
-                DrawEndpointJunctions(canvas, edge);
-                canvas.Overwrite(targetX, targetY, '▶');
-                DrawPortLabels(canvas, edge);
-                continue;
-            }
-
-            var laneY = longEdgeLane;
-            longEdgeLane += 2;
-
+            var laneStartY = edge.DepartureY!.Value;
+            var laneEndY = edge.ArrivalY!.Value;
             canvas.DrawHorizontal(
-                sourceY,
+                laneStartY,
                 sourceX,
-                sourceX + 1,
+                laneX,
                 horizontalStroke);
             canvas.DrawVertical(
-                sourceX + 1,
-                sourceY,
-                laneY,
+                laneX,
+                laneStartY,
+                laneEndY,
                 verticalStroke);
             canvas.DrawHorizontal(
-                laneY,
-                sourceX + 1,
-                targetX - 1,
-                horizontalStroke);
-            canvas.DrawVertical(
-                targetX - 1,
-                laneY,
-                targetY,
-                verticalStroke);
-            canvas.DrawHorizontal(
-                targetY,
-                targetX - 1,
+                laneEndY,
+                laneX,
                 targetX,
                 horizontalStroke);
+            canvas.DrawVertical(
+                targetX,
+                laneEndY,
+                lastRouteY,
+                verticalStroke);
             canvas.Overwrite(
-                sourceX + 1,
-                sourceY,
-                laneY > sourceY ? '┐' : '┘');
+                sourceX,
+                laneStartY,
+                laneX > sourceX ? '└' : '┘');
             canvas.Overwrite(
-                sourceX + 1,
-                laneY,
-                laneY > sourceY ? '└' : '┌');
+                laneX,
+                laneStartY,
+                laneX > sourceX ? '┐' : '┌');
             canvas.Overwrite(
-                targetX - 1,
-                laneY,
-                laneY > targetY ? '┘' : '┐');
+                laneX,
+                laneEndY,
+                targetX > laneX ? '└' : '┘');
             canvas.Overwrite(
-                targetX - 1,
-                targetY,
-                laneY > targetY ? '┌' : '└');
-            DrawEndpointJunctions(canvas, edge);
-            canvas.Overwrite(targetX, targetY, '▶');
-            DrawPortLabels(canvas, edge);
-        }
-    }
-
-    private static void DrawEndpointJunctions(Canvas canvas, Edge edge)
-    {
-        canvas.Overwrite(edge.Source.Right, edge.SourceY, '├');
-        canvas.Overwrite(edge.Target.Left, edge.TargetY, '┤');
-    }
-
-    private static void DrawPortLabels(Canvas canvas, Edge edge)
-    {
-        if (edge.IsGuardEdge)
-        {
-            canvas.Write(edge.Source.Right + 1, edge.SourceY, "guard");
+                targetX,
+                laneEndY,
+                targetX > laneX ? '┐' : '┌');
             return;
         }
 
-        if (edge.IsOrderEdge)
+        if (sourceX == targetX)
         {
+            canvas.DrawVertical(
+                sourceX,
+                firstRouteY,
+                lastRouteY,
+                verticalStroke);
             return;
         }
 
-        if (edge.SourcePort is int sourcePort)
-        {
-            canvas.Write(edge.Source.Right + 1, edge.SourceY, $"o{sourcePort}");
-        }
+        var middleY = Math.Min(
+            lastRouteY,
+            firstRouteY + (edge.RouteLane ?? 0));
+        canvas.DrawVertical(
+            sourceX,
+            firstRouteY,
+            middleY,
+            verticalStroke);
+        canvas.DrawHorizontal(
+            middleY,
+            sourceX,
+            targetX,
+            horizontalStroke);
+        canvas.DrawVertical(
+            targetX,
+            middleY,
+            lastRouteY,
+            verticalStroke);
+        canvas.Overwrite(
+            sourceX,
+            middleY,
+            targetX > sourceX ? '└' : '┘');
+        canvas.Overwrite(
+            targetX,
+            middleY,
+            targetX > sourceX ? '┐' : '┌');
+    }
 
-        if (edge.TargetPort is int targetPort)
+    private static void DrawEdgeEndpoints(Canvas canvas, Edge edge)
+    {
+        var sourceX = edge.Source.GetOutputX(edge.SourceSlot);
+        var targetX = edge.Target.GetInputX(edge.TargetSlot);
+
+        canvas.Overwrite(sourceX, edge.Source.Bottom, '┬');
+        canvas.Overwrite(targetX, edge.Target.Top, '┴');
+        canvas.Overwrite(targetX, edge.Target.Top - 1, '▼');
+
+        var edgeLabel = edge.IsOrderEdge
+            ? "order"
+            : edge.IsGuardEdge
+                ? "guard"
+            : $"o{edge.SourcePort!.Value}";
+        canvas.Write(sourceX + 1, edge.Source.Bottom + 1, edgeLabel);
+
+        if (!edge.IsOrderEdge && edge.TargetPort is int targetPort)
         {
-            var label = $"i{targetPort}";
             canvas.Write(
-                edge.Target.Left - label.Length - 1,
-                edge.TargetY,
-                label);
+                targetX + 1,
+                edge.Target.Top - 1,
+                $"i{targetPort}");
         }
     }
 
@@ -189,42 +269,41 @@ public static class AsciiGraphWriter
         canvas.Clear(node.Left, node.Top, node.Right, node.Bottom);
         canvas.DrawHorizontal(node.Top, node.Left, node.Right);
         canvas.DrawHorizontal(node.Bottom, node.Left, node.Right);
-        canvas.Set(node.Left, node.Top, '┌');
-        canvas.Set(node.Right, node.Top, '┐');
-        canvas.Set(node.Left, node.Bottom, '└');
-        canvas.Set(node.Right, node.Bottom, '┘');
+        canvas.Overwrite(node.Left, node.Top, '┌');
+        canvas.Overwrite(node.Right, node.Top, '┐');
+        canvas.Overwrite(node.Left, node.Bottom, '└');
+        canvas.Overwrite(node.Right, node.Bottom, '┘');
         canvas.DrawVertical(node.Left, node.Top + 1, node.Bottom - 1);
         canvas.DrawVertical(node.Right, node.Top + 1, node.Bottom - 1);
-        canvas.Write(node.Left + 2, node.CenterY, node.Label);
+        canvas.Write(node.Left + 2, node.Top + 1, node.Label);
+
+        for (var index = 0; index < node.Content.Count; index++)
+        {
+            canvas.Write(
+                node.Left + 2,
+                node.Top + 2 + index,
+                node.Content[index]);
+        }
     }
 
-    private sealed class Layout
+    private sealed class Layout(
+        IReadOnlyList<Node> nodes,
+        IReadOnlyList<Edge> edges,
+        int width,
+        int height)
     {
-        private Layout(
-            IReadOnlyList<Node> nodes,
-            IReadOnlyList<Edge> edges,
-            int width,
-            int height,
-            int nodeHeight)
-        {
-            Nodes = nodes;
-            Edges = edges;
-            Width = width;
-            Height = height;
-            NodeHeight = nodeHeight;
-        }
+        public IReadOnlyList<Node> Nodes { get; } = nodes;
 
-        public IReadOnlyList<Node> Nodes { get; }
+        public IReadOnlyList<Edge> Edges { get; } = edges;
 
-        public IReadOnlyList<Edge> Edges { get; }
+        public int Width { get; } = width;
 
-        public int Width { get; }
+        public int Height { get; } = height;
 
-        public int Height { get; }
-
-        public int NodeHeight { get; }
-
-        public static Layout Create(BuildGraph graph)
+        public static Layout Create(
+            OperationGraph graph,
+            Func<Operation, string>? labelProvider,
+            Func<Operation, IReadOnlyList<string>?>? contentProvider)
         {
             var operationNodes =
                 new Dictionary<Operation, Node>(ReferenceEqualityComparer.Instance);
@@ -235,18 +314,21 @@ public static class AsciiGraphWriter
                 operationNodes.Add(
                     operation,
                     new Node(
-                        $"[{index}] {GetTypeDisplayName(operation.GetType())}",
+                        $"[{index}] {labelProvider?.Invoke(operation) ?? GetTypeDisplayName(operation.GetType())}",
                         index,
                         operation.Inputs.Count,
-                        operation.Outputs.Count));
+                        operation.Outputs.Count,
+                        contentProvider?.Invoke(operation)));
             }
 
             AssignOperationRanks(graph, operationNodes);
 
             var nodes = operationNodes.Values.OrderBy(node => node.Order).ToList();
             var edges = new List<Edge>();
-            var externalNodes = new Dictionary<Value, Node>(ReferenceEqualityComparer.Instance);
-            var consumedValues = new HashSet<Value>(ReferenceEqualityComparer.Instance);
+            var externalNodes =
+                new Dictionary<Value, Node>(ReferenceEqualityComparer.Instance);
+            var consumedValues =
+                new HashSet<Value>(ReferenceEqualityComparer.Instance);
             var nextOrder = graph.Operations.Count;
 
             foreach (var consumer in graph.Operations)
@@ -256,10 +338,10 @@ public static class AsciiGraphWriter
                 for (var inputIndex = 0; inputIndex < consumer.Inputs.Count; inputIndex++)
                 {
                     var input = consumer.Inputs[inputIndex];
-                    var isOrderEdge = IsOrderValue(input);
-                    var isGuardEdge = IsGuardValue(input);
                     consumedValues.Add(input);
                     var producer = graph.GetProducer(input);
+                    var isOrderEdge = IsOrderValue(input);
+                    var isGuardEdge = IsGuardValue(input);
 
                     if (producer is not null)
                     {
@@ -269,6 +351,12 @@ public static class AsciiGraphWriter
                                 consumerNode,
                                 IndexOfReference(producer.Outputs, input),
                                 inputIndex,
+                                isOrderEdge || isGuardEdge
+                                    ? null
+                                    : IndexOfReference(producer.Outputs, input),
+                                isOrderEdge || isGuardEdge
+                                    ? null
+                                    : inputIndex,
                                 isOrderEdge,
                                 isGuardEdge));
                         continue;
@@ -292,8 +380,12 @@ public static class AsciiGraphWriter
                         new Edge(
                             externalNode,
                             consumerNode,
-                            0,
-                            inputIndex,
+                            SourceSlot: 0,
+                            TargetSlot: inputIndex,
+                            SourcePort: isOrderEdge || isGuardEdge ? null : 0,
+                            TargetPort: isOrderEdge || isGuardEdge
+                                ? null
+                                : inputIndex,
                             isOrderEdge,
                             isGuardEdge));
                 }
@@ -315,7 +407,7 @@ public static class AsciiGraphWriter
                     var isOrderEdge = IsOrderValue(output);
                     var isGuardEdge = IsGuardValue(output);
                     var outputNode = new Node(
-                        $"output[{operationNodes[operation].Order}:{outputIndex}]",
+                        $"output[{producerNode.Order}:{outputIndex}]",
                         nextOrder++,
                         inputCount: 1,
                         outputCount: 0)
@@ -329,7 +421,11 @@ public static class AsciiGraphWriter
                             producerNode,
                             outputNode,
                             outputIndex,
-                            null,
+                            TargetSlot: 0,
+                            SourcePort: isOrderEdge || isGuardEdge
+                                ? null
+                                : outputIndex,
+                            TargetPort: null,
                             isOrderEdge,
                             isGuardEdge));
                 }
@@ -337,26 +433,244 @@ public static class AsciiGraphWriter
 
             EnsureEdgesAdvanceRanks(edges);
             MoveNodesTowardConsumers(nodes, edges);
-            PositionNodes(nodes, edges);
+            EnsureEdgesAdvanceRanks(edges);
 
-            var longEdgeCount = edges.Count(
-                edge => edge.Target.Rank > edge.Source.Rank + 1);
+            var rowWidths = nodes
+                .GroupBy(node => node.Rank)
+                .ToDictionary(
+                    group => group.Key,
+                    group => group.Sum(node => node.Width) +
+                        ((group.Count() - 1) * HorizontalGap));
+            var contentWidth = rowWidths.Values.Max();
+            var longEdges = edges
+                .Where(edge => edge.Target.Rank > edge.Source.Rank + 1)
+                .ToArray();
 
-            if (longEdgeCount > 0)
+            for (var index = 0; index < longEdges.Length; index++)
             {
-                var nodeOffset = longEdgeCount * 2;
+                longEdges[index].LaneX =
+                    contentWidth + 2 + (index * 2);
+            }
 
-                foreach (var node in nodes)
+            var ranks = nodes
+                .GroupBy(node => node.Rank)
+                .OrderBy(group => group.Key)
+                .ToArray();
+
+            foreach (var rank in ranks)
+            {
+                var rankNodes = rank
+                    .OrderBy(node => GetOrderingHint(node, edges))
+                    .ThenBy(node => node.Order)
+                    .ToArray();
+                var left =
+                    (contentWidth - rowWidths[rank.Key]) / 2;
+
+                foreach (var node in rankNodes)
                 {
-                    node.Top += nodeOffset;
+                    node.Left = left;
+                    left += node.Width + HorizontalGap;
+                }
+
+                if (rankNodes.Length == 1)
+                {
+                    AlignWithSinglePredecessor(
+                        rankNodes[0],
+                        edges,
+                        minimumLeft: 0,
+                        contentWidth);
                 }
             }
 
-            var width = nodes.Max(node => node.Right) + 1;
-            var nodeHeight = nodes.Max(node => node.Bottom) + 1;
-            var height = nodeHeight + 1;
+            var routeLaneCounts = AssignRouteLanes(ranks, edges);
 
-            return new Layout(nodes, edges, width, height, nodeHeight);
+            var top = 0;
+
+            for (var rankIndex = 0; rankIndex < ranks.Length; rankIndex++)
+            {
+                var rank = ranks[rankIndex];
+
+                foreach (var node in rank)
+                {
+                    node.Top = top;
+                }
+
+                if (rankIndex + 1 < ranks.Length)
+                {
+                    var routingGap = Math.Max(
+                        3,
+                        routeLaneCounts[rank.Key] + 2);
+
+                    top += rank.Max(node => node.Height) + routingGap;
+                }
+            }
+
+            var rankIndexes = ranks
+                .Select((rank, index) => (rank.Key, index))
+                .ToDictionary(pair => pair.Key, pair => pair.index);
+
+            foreach (var edge in longEdges)
+            {
+                edge.DepartureY =
+                    edge.Source.Bottom + 2 + edge.DepartureLane!.Value;
+                var precedingTargetRank =
+                    ranks[rankIndexes[edge.Target.Rank] - 1];
+                edge.ArrivalY =
+                    precedingTargetRank.Max(node => node.Bottom) +
+                    2 +
+                    edge.ArrivalLane!.Value;
+            }
+
+            var width = contentWidth + 2 + (longEdges.Length * 2);
+            var height = nodes.Max(node => node.Bottom) + 1;
+
+            return new Layout(nodes, edges, width, height);
+        }
+
+        private static Dictionary<int, int> AssignRouteLanes(
+            IReadOnlyList<IGrouping<int, Node>> ranks,
+            IReadOnlyList<Edge> edges)
+        {
+            var result = new Dictionary<int, int>();
+
+            for (var rankIndex = 0; rankIndex + 1 < ranks.Count; rankIndex++)
+            {
+                var sourceRank = ranks[rankIndex].Key;
+                var targetRank = ranks[rankIndex + 1].Key;
+                var lanes = new List<List<(int Start, int End)>>();
+                var segments = new List<(
+                    int Start,
+                    int End,
+                    Action<int> AssignLane)>();
+
+                foreach (var edge in edges)
+                {
+                    if (edge.Source.Rank == sourceRank &&
+                        edge.Target.Rank == targetRank)
+                    {
+                        AddSegment(
+                            edge.Source.GetOutputX(edge.SourceSlot),
+                            edge.Target.GetInputX(edge.TargetSlot),
+                            lane => edge.RouteLane = lane);
+                    }
+                    else if (edge.Source.Rank == sourceRank &&
+                        edge.Target.Rank > targetRank)
+                    {
+                        AddSegment(
+                            edge.Source.GetOutputX(edge.SourceSlot),
+                            edge.LaneX!.Value,
+                            lane => edge.DepartureLane = lane);
+                    }
+                    else if (edge.Source.Rank < sourceRank &&
+                        edge.Target.Rank == targetRank)
+                    {
+                        AddSegment(
+                            edge.LaneX!.Value,
+                            edge.Target.GetInputX(edge.TargetSlot),
+                            lane => edge.ArrivalLane = lane);
+                    }
+                }
+
+                foreach (var segment in segments
+                    .OrderByDescending(
+                        segment => segment.End - segment.Start)
+                    .ThenBy(segment => segment.Start))
+                {
+                    var laneIndex = lanes.FindIndex(
+                        lane => lane.All(
+                            existing =>
+                                segment.End < existing.Start ||
+                                segment.Start > existing.End));
+
+                    if (laneIndex < 0)
+                    {
+                        laneIndex = lanes.Count;
+                        lanes.Add([]);
+                    }
+
+                    lanes[laneIndex].Add((segment.Start, segment.End));
+                    segment.AssignLane(laneIndex);
+                }
+
+                result[sourceRank] = lanes.Count;
+
+                void AddSegment(
+                    int firstX,
+                    int secondX,
+                    Action<int> assignLane)
+                {
+                    if (firstX == secondX)
+                    {
+                        assignLane(0);
+                        return;
+                    }
+
+                    segments.Add(
+                        (Math.Min(firstX, secondX),
+                         Math.Max(firstX, secondX),
+                         assignLane));
+                }
+            }
+
+            return result;
+        }
+
+        private static void AlignWithSinglePredecessor(
+            Node node,
+            IReadOnlyList<Edge> edges,
+            int minimumLeft,
+            int contentWidth)
+        {
+            var incoming = edges
+                .Where(edge => ReferenceEquals(edge.Target, node))
+                .Where(edge => edge.Source.IsPositioned)
+                .ToArray();
+
+            if (incoming.Length != 1)
+            {
+                return;
+            }
+
+            var edge = incoming[0];
+            var sourceX = edge.Source.GetOutputX(edge.SourceSlot);
+            var targetOffset =
+                (((edge.TargetSlot + 1) * node.Width) /
+                    (node.InputCount + 1));
+
+            node.Left = Math.Clamp(
+                sourceX - targetOffset,
+                minimumLeft,
+                minimumLeft + contentWidth - node.Width);
+        }
+
+        private static double GetOrderingHint(
+            Node node,
+            IReadOnlyList<Edge> edges)
+        {
+            var outgoing = edges
+                .Where(edge => ReferenceEquals(edge.Source, node))
+                .ToArray();
+
+            if (outgoing.Length > 0)
+            {
+                return outgoing.Min(
+                    edge =>
+                        (edge.Target.Order * 1_000) +
+                        edge.TargetSlot);
+            }
+
+            var incoming = edges
+                .Where(edge => ReferenceEquals(edge.Target, node))
+                .Where(edge => edge.Source.IsPositioned)
+                .ToArray();
+
+            if (incoming.Length > 0)
+            {
+                return incoming.Average(
+                    edge => edge.Source.GetOutputX(edge.SourceSlot));
+            }
+
+            return node.Order;
         }
 
         private static void MoveNodesTowardConsumers(
@@ -365,21 +679,16 @@ public static class AsciiGraphWriter
         {
             foreach (var node in nodes.OrderByDescending(node => node.Rank))
             {
-                if (node.PinnedRank)
-                {
-                    continue;
-                }
-
-                var outgoingEdges = edges
+                var outgoing = edges
                     .Where(edge => ReferenceEquals(edge.Source, node))
                     .ToArray();
 
-                if (outgoingEdges.Length == 0)
+                if (outgoing.Length == 0)
                 {
                     continue;
                 }
 
-                var latestRank = outgoingEdges.Min(edge => edge.Target.Rank - 1);
+                var latestRank = outgoing.Min(edge => edge.Target.Rank - 1);
                 var earliestRank = edges
                     .Where(edge => ReferenceEquals(edge.Target, node))
                     .Select(edge => edge.Source.Rank + 1)
@@ -393,48 +702,26 @@ public static class AsciiGraphWriter
             }
         }
 
-        private static string GetTypeDisplayName(Type type)
-        {
-            var name = type.Name;
-            var genericMarker = name.IndexOf('`');
-            return genericMarker < 0 ? name : name[..genericMarker];
-        }
-
-        private static int IndexOfReference(
-            IReadOnlyList<Value> values,
-            Value expected)
-        {
-            for (var index = 0; index < values.Count; index++)
-            {
-                if (ReferenceEquals(values[index], expected))
-                {
-                    return index;
-                }
-            }
-
-            throw new InvalidOperationException(
-                "The producer does not expose the value as an output.");
-        }
-
         private static void AssignOperationRanks(
-            BuildGraph graph,
-            IReadOnlyDictionary<Operation, Node> operationNodes)
+            OperationGraph graph,
+            IReadOnlyDictionary<Operation, Node> nodes)
         {
-            var assigned = new HashSet<Operation>(ReferenceEqualityComparer.Instance);
+            var assigned =
+                new HashSet<Operation>(ReferenceEqualityComparer.Instance);
 
             foreach (var operation in graph.Operations)
             {
-                AssignOperationRank(graph, operation, operationNodes, assigned);
+                AssignOperationRank(graph, operation, nodes, assigned);
             }
         }
 
         private static int AssignOperationRank(
-            BuildGraph graph,
+            OperationGraph graph,
             Operation operation,
-            IReadOnlyDictionary<Operation, Node> operationNodes,
+            IReadOnlyDictionary<Operation, Node> nodes,
             HashSet<Operation> assigned)
         {
-            var node = operationNodes[operation];
+            var node = nodes[operation];
 
             if (assigned.Contains(operation))
             {
@@ -447,7 +734,7 @@ public static class AsciiGraphWriter
             {
                 rank = Math.Max(
                     rank,
-                    AssignOperationRank(graph, dependency, operationNodes, assigned) + 1);
+                    AssignOperationRank(graph, dependency, nodes, assigned) + 1);
             }
 
             node.Rank = rank;
@@ -455,7 +742,8 @@ public static class AsciiGraphWriter
             return rank;
         }
 
-        private static void EnsureEdgesAdvanceRanks(IReadOnlyList<Edge> edges)
+        private static void EnsureEdgesAdvanceRanks(
+            IReadOnlyList<Edge> edges)
         {
             var changed = true;
 
@@ -476,96 +764,28 @@ public static class AsciiGraphWriter
             }
         }
 
-        private static void PositionNodes(
-            IReadOnlyList<Node> nodes,
-            IReadOnlyList<Edge> edges)
+        private static int IndexOfReference(
+            IReadOnlyList<Value> values,
+            Value expected)
         {
-            var ranks = nodes
-                .GroupBy(node => node.Rank)
-                .OrderBy(group => group.Key)
-                .ToArray();
-
-            var rankLeft = 0;
-
-            foreach (var rank in ranks)
+            for (var index = 0; index < values.Count; index++)
             {
-                var rankNodes = rank.ToList();
-                var rankWidth = rankNodes.Max(node => node.Width);
-
-                foreach (var node in rankNodes)
+                if (ReferenceEquals(values[index], expected))
                 {
-                    node.Left = rankLeft;
-                }
-
-                rankLeft += rankWidth + HorizontalGap;
-            }
-
-            foreach (var rank in ranks)
-            {
-                var rankNodes = rank
-                    .OrderBy(node => GetOrderingHint(node, edges))
-                    .ThenBy(node => node.Order)
-                    .ToArray();
-
-                var nextTop = 0;
-
-                foreach (var node in rankNodes)
-                {
-                    var desiredTop = GetDesiredTop(node, edges);
-                    node.Top = Math.Max(nextTop, desiredTop);
-                    nextTop = node.Bottom + VerticalGap + 1;
+                    return index;
                 }
             }
+
+            throw new InvalidOperationException(
+                "The producer does not expose the value as an output.");
         }
 
-        private static double GetOrderingHint(Node node, IReadOnlyList<Edge> edges)
+        private static string GetTypeDisplayName(Type type)
         {
-            var incomingEdges = edges
-                .Where(edge => ReferenceEquals(edge.Target, node) && edge.Source.IsPositioned)
-                .ToArray();
-
-            if (incomingEdges.Length > 0)
-            {
-                return incomingEdges.Average(
-                    edge => edge.SourceY - GetTargetPortOffset(edge));
-            }
-
-            var outgoingEdges = edges
-                .Where(edge => ReferenceEquals(edge.Source, node))
-                .ToArray();
-
-            if (outgoingEdges.Length > 0)
-            {
-                return outgoingEdges.Min(
-                    edge => (edge.Target.Order * 1_000) + (edge.TargetPort ?? 0));
-            }
-
-            return node.Order * 1_000;
+            var name = type.Name;
+            var genericMarker = name.IndexOf('`');
+            return genericMarker < 0 ? name : name[..genericMarker];
         }
-
-        private static int GetDesiredTop(Node node, IReadOnlyList<Edge> edges)
-        {
-            var predecessors = edges
-                .Where(edge => ReferenceEquals(edge.Target, node))
-                .Where(edge => edge.Source.IsPositioned)
-                .ToArray();
-
-            if (predecessors.Length == 0)
-            {
-                return 0;
-            }
-
-            return Math.Max(
-                0,
-                (int)Math.Round(
-                    predecessors.Average(
-                        edge => edge.SourceY - GetTargetPortOffset(edge))));
-        }
-
-        private static int GetTargetPortOffset(Edge edge) =>
-            edge.TargetPort is int targetPort
-                ? targetPort + 1
-                : edge.Target.Height / 2;
     }
 
     private sealed class Node(
@@ -573,71 +793,67 @@ public static class AsciiGraphWriter
         int order,
         int inputCount,
         int outputCount,
-        bool hasOrderInput = false,
-        bool hasOrderOutput = false,
-        bool pinnedRank = false)
+        IReadOnlyList<string>? content = null)
     {
         public string Label { get; } = label;
 
         public int Order { get; } = order;
 
-        public bool PinnedRank { get; } = pinnedRank;
+        public IReadOnlyList<string> Content { get; } = content ?? [];
 
-        public bool HasOrderPort { get; } =
-            hasOrderInput || hasOrderOutput;
+        public int InputCount { get; } = Math.Max(1, inputCount);
+
+        public int OutputCount { get; } = Math.Max(1, outputCount);
 
         public int Rank { get; set; }
 
-        public int Left { get; set; }
+        public int Left { get; set; } = -1;
 
-        public int Top { get; set; } = -1;
+        public int Top { get; set; }
 
-        public int Width => Label.Length + 4;
+        public int Width { get; } = Math.Max(
+            Math.Max(
+                label.Length + 4,
+                (Math.Max(inputCount, outputCount) * 7) + 3),
+            (content?.Select(static line => line.Length).DefaultIfEmpty(0).Max() ?? 0) + 4);
 
-        private int DataRowCount =>
-            Math.Max(1, Math.Max(inputCount, outputCount));
-
-        public int Height => DataRowCount + 2 + (HasOrderPort ? 1 : 0);
+        public int Height => Content.Count + 3;
 
         public int Right => Left + Width - 1;
 
-        public int CenterY => Top + 1 + ((DataRowCount - 1) / 2);
-
         public int Bottom => Top + Height - 1;
 
-        public bool IsPositioned => Top >= 0;
+        public bool IsPositioned => Left >= 0;
 
-        public int GetInputY(int index) => Top + index + 1;
+        public int GetInputX(int slot) =>
+            Left + (((slot + 1) * Width) / (InputCount + 1));
 
-        public int GetOutputY(int index) => Top + index + 1;
-
-        public int GetOrderY() => Bottom - 1;
+        public int GetOutputX(int slot) =>
+            Left + (((slot + 1) * Width) / (OutputCount + 1));
     }
 
     private sealed record Edge(
         Node Source,
         Node Target,
+        int SourceSlot,
+        int TargetSlot,
         int? SourcePort,
         int? TargetPort,
         bool IsOrderEdge,
         bool IsGuardEdge)
     {
-        public int SourceY =>
-            SourcePort is int sourcePort
-                ? Source.GetOutputY(sourcePort)
-                : Source.CenterY;
+        public int? LaneX { get; set; }
 
-        public int TargetY =>
-            TargetPort is int targetPort
-                ? Target.GetInputY(targetPort)
-                : Target.CenterY;
+        public int? RouteLane { get; set; }
+
+        public int? DepartureLane { get; set; }
+
+        public int? ArrivalLane { get; set; }
+
+        public int? DepartureY { get; set; }
+
+        public int? ArrivalY { get; set; }
     }
-
-    private static bool IsOrderValue(Value value) =>
-        value is Value<OrderToken>;
-
-    private static bool IsGuardValue(Value value) =>
-        value is Value<GuardToken>;
 
     private sealed class Canvas
     {
@@ -652,7 +868,10 @@ public static class AsciiGraphWriter
         {
             for (var index = 0; index < text.Length; index++)
             {
-                Set(x + index, y, text[index]);
+                if (x + index < _characters.GetLength(1))
+                {
+                    Set(x + index, y, text[index]);
+                }
             }
         }
 
@@ -687,11 +906,9 @@ public static class AsciiGraphWriter
             _characters[y, x] = (existing, character) switch
             {
                 ('\0', _) => character,
-                (_, '▶') => '▶',
                 _ when IsHorizontal(existing) && IsVertical(character) => '┼',
                 _ when IsVertical(existing) && IsHorizontal(character) => '┼',
                 ('┼', _) or (_, '┼') => '┼',
-                ('+', _) or (_, '+') => '┼',
                 _ when existing == character => existing,
                 _ => character,
             };
@@ -730,7 +947,10 @@ public static class AsciiGraphWriter
 
                 for (var x = 0; x < _characters.GetLength(1); x++)
                 {
-                    builder.Append(_characters[y, x] is '\0' ? ' ' : _characters[y, x]);
+                    builder.Append(
+                        _characters[y, x] is '\0'
+                            ? ' '
+                            : _characters[y, x]);
                 }
 
                 writer.WriteLine(builder.ToString().TrimEnd());
@@ -753,4 +973,11 @@ public static class AsciiGraphWriter
             return 0;
         }
     }
+
+    private static bool IsOrderValue(Value value) =>
+        value is Value<OrderToken>;
+
+    private static bool IsGuardValue(Value value) =>
+        value is Value<GuardToken>;
+
 }

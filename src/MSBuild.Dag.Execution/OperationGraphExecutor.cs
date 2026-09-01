@@ -2,10 +2,10 @@ using MSBuild.Dag.Core;
 
 namespace MSBuild.Dag.Execution;
 
-public sealed class BuildGraphExecutor
+public sealed class OperationGraphExecutor
 {
     public async ValueTask ExecuteAsync(
-        BuildGraph graph,
+        OperationGraph graph,
         ValueStore values,
         Func<Operation, ValueStore, CancellationToken, ValueTask> executeOperation,
         CancellationToken cancellationToken = default)

@@ -23,7 +23,7 @@ items["Compile"] = appendGeneratedSources.Result;
 
 var compile = new Compile(items["Compile"]);
 
-var graph = new BuildGraph([
+var graph = new OperationGraph([
     computeConfiguration,
     reportConfiguration,
     generateSources,
@@ -40,7 +40,7 @@ values.Set(
     initialCompileItems,
     (IReadOnlyList<string>)["Program.cs"]);
 
-await new BuildGraphExecutor().ExecuteAsync(
+await new OperationGraphExecutor().ExecuteAsync(
     graph,
     values,
     SampleOperationExecutor.ExecuteAsync);

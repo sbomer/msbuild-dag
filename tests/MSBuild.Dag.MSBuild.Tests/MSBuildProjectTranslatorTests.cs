@@ -107,7 +107,7 @@ public sealed class MSBuildProjectTranslatorTests
             _ => compileExecuted = true);
         var values = new ValueStore();
 
-        await new BuildGraphExecutor().ExecuteAsync(
+        await new OperationGraphExecutor().ExecuteAsync(
             result.Graph,
             values,
             evaluator.EvaluateAsync);
@@ -129,7 +129,7 @@ public sealed class MSBuildProjectTranslatorTests
         var values = new ValueStore();
         var evaluator = CreateEvaluator();
 
-        await new BuildGraphExecutor().ExecuteAsync(
+        await new OperationGraphExecutor().ExecuteAsync(
             result.Graph,
             values,
             evaluator.EvaluateAsync);

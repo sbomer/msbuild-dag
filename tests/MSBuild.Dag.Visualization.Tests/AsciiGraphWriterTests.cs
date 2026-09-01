@@ -12,7 +12,7 @@ public sealed class AsciiGraphWriterTests
         var consumer = new TestOperation(
             [external, producer.Outputs[0]],
             [new Value()]);
-        var graph = new BuildGraph([producer, consumer]);
+        var graph = new OperationGraph([producer, consumer]);
 
         var result = AsciiGraphWriter.Render(graph);
 
@@ -21,22 +21,21 @@ public sealed class AsciiGraphWriterTests
         Assert.Equal(1, CountOccurrences(result, "external[0]"));
         Assert.Equal(1, CountOccurrences(result, "output[0:1]"));
         Assert.Equal(1, CountOccurrences(result, "output[1:0]"));
-        Assert.Contains('▶', result);
+        Assert.Contains('▼', result);
         Assert.Contains('┌', result);
         Assert.Contains('┘', result);
         Assert.Contains("o0", result);
         Assert.Contains("i1", result);
-        Assert.DoesNotContain('┼', result);
     }
 
     [Fact]
     public void RendersEmptyGraph()
     {
-        var graph = new BuildGraph([]);
+        var graph = new OperationGraph([]);
 
         var result = AsciiGraphWriter.Render(graph);
 
-        Assert.Equal($"BuildGraph{Environment.NewLine}(empty){Environment.NewLine}", result);
+        Assert.Equal($"OperationGraph{Environment.NewLine}(empty){Environment.NewLine}", result);
     }
 
     [Fact]
@@ -47,16 +46,17 @@ public sealed class AsciiGraphWriterTests
         var consumer = new OrderedTestOperation(
             producer.OrderOutput!,
             producer.Result);
-        var graph = new BuildGraph([producer, consumer]);
+        var graph = new OperationGraph([producer, consumer]);
 
         var result = AsciiGraphWriter.Render(graph);
 
-        Assert.Equal(5, CountOccurrences(result, "▶"));
-        Assert.Contains('╌', result);
+        Assert.Contains('▼', result);
+        Assert.Contains("order", result);
+        Assert.Contains('╎', result);
     }
 
     [Fact]
-    public void VerticalGraphLabelsOrderEdgesSeparatelyFromDataEdges()
+    public void LabelsOrderEdgesSeparatelyFromDataEdges()
     {
         var initialOrder = new Value<OrderToken>();
         var first = new OrderedTestOperation(initialOrder);
@@ -64,16 +64,71 @@ public sealed class AsciiGraphWriterTests
         var consumer = new TestOperation(
             [first.Result, second.Result],
             [new Value()]);
-        var graph = new BuildGraph([first, second, consumer]);
+        var graph = new OperationGraph([first, second, consumer]);
 
-        var result = VerticalGraphWriter.Render(graph);
+        var result = AsciiGraphWriter.Render(graph);
 
         Assert.Contains("order", result);
-        Assert.Contains('╌', result);
         Assert.Contains('╎', result);
         Assert.Contains("i0", result);
         Assert.Contains("i1", result);
         Assert.Equal(1, CountOccurrences(result, "[2] TestOperation"));
+    }
+
+    [Fact]
+    public void RendersTargetsWithDataAndExplicitOrderEdges()
+    {
+        var data = new Value<string>();
+        var producer = new TestOperation([], [data]);
+        var consumer = new TestOperation([data], []);
+        var first = new Target([], [data], [producer]);
+        var second = new Target([data], [], [consumer]);
+        var third = new Target([], [], []);
+        var graph = new BuildGraph(
+            [first, second, third],
+            [new TargetDependency(second, third)]);
+        var names = new Dictionary<Target, string>(
+            ReferenceEqualityComparer.Instance)
+        {
+            [first] = "Prepare",
+            [second] = "Compile",
+            [third] = "Report",
+        };
+
+        var result = AsciiGraphWriter.Render(graph, names);
+
+        Assert.StartsWith($"BuildGraph{Environment.NewLine}", result);
+        Assert.Contains("[0] Prepare", result);
+        Assert.Contains("[1] Compile", result);
+        Assert.Contains("[2] Report", result);
+        Assert.Contains('─', result);
+        Assert.Contains("order", result);
+        Assert.Contains('╎', result);
+    }
+
+    [Fact]
+    public void ExpandedBuildGraphIncludesTargetBodies()
+    {
+        var data = new Value<string>();
+        var producer = new TestOperation([], [data]);
+        var consumer = new TestOperation([data], []);
+        var first = new Target([], [data], [producer]);
+        var second = new Target([data], [], [consumer]);
+        var graph = new BuildGraph([first, second]);
+        var names = new Dictionary<Target, string>(
+            ReferenceEqualityComparer.Instance)
+        {
+            [first] = "Prepare",
+            [second] = "Compile",
+        };
+
+        var result = AsciiGraphWriter.RenderExpanded(graph, names);
+
+        Assert.Contains("BuildGraph", result);
+        Assert.Contains("[0] Prepare", result);
+        Assert.Contains("[1] Compile", result);
+        Assert.Equal(2, CountOccurrences(result, "TestOperation"));
+        Assert.DoesNotContain("Target bodies", result);
     }
 
     private static int CountOccurrences(string value, string search)

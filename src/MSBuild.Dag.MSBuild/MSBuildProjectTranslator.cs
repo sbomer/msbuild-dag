@@ -68,7 +68,7 @@ public sealed class MSBuildProjectTranslator
         }
 
         return new TranslationResult(
-            new BuildGraph(context.Operations),
+            new OperationGraph(context.Operations),
             new Dictionary<string, Value<string>>(
                 context.Properties,
                 StringComparer.OrdinalIgnoreCase),
