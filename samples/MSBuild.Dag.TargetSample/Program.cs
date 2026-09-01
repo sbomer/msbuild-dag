@@ -31,7 +31,7 @@ var names = new Dictionary<Target, string>(
     [report] = "Report",
 };
 
-AsciiGraphWriter.WriteExpanded(graph, Console.Out, names);
+AsciiGraphWriter.Write(graph, Console.Out, names);
 
 sealed class PrepareOperation(Value<string> configuration) : Operation
 {

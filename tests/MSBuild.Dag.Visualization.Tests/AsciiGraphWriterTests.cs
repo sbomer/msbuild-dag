@@ -95,7 +95,7 @@ public sealed class AsciiGraphWriterTests
             [third] = "Report",
         };
 
-        var result = AsciiGraphWriter.Render(graph, names);
+        var result = AsciiGraphWriter.RenderCompact(graph, names);
 
         Assert.StartsWith($"BuildGraph{Environment.NewLine}", result);
         Assert.Contains("[0] Prepare", result);
@@ -122,7 +122,7 @@ public sealed class AsciiGraphWriterTests
             [second] = "Compile",
         };
 
-        var result = AsciiGraphWriter.RenderExpanded(graph, names);
+        var result = AsciiGraphWriter.Render(graph, names);
 
         Assert.Contains("BuildGraph", result);
         Assert.Contains("[0] Prepare", result);

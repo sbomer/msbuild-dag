@@ -67,8 +67,18 @@ public sealed class MSBuildProjectTranslator
             }
         }
 
+        var operationGraph = new OperationGraph(context.Operations);
+        var translatedTarget = new Target(
+            GetExternalInputs(operationGraph),
+            GetTargetOutputs(operationGraph, context),
+            context.Operations);
+
         return new TranslationResult(
-            new OperationGraph(context.Operations),
+            new BuildGraph([translatedTarget]),
+            new Dictionary<string, Target>(StringComparer.OrdinalIgnoreCase)
+            {
+                [targetName] = translatedTarget,
+            },
             new Dictionary<string, Value<string>>(
                 context.Properties,
                 StringComparer.OrdinalIgnoreCase),
@@ -78,6 +88,43 @@ public sealed class MSBuildProjectTranslator
             new Dictionary<string, Value<bool>>(
                 context.TargetConditions,
                 StringComparer.OrdinalIgnoreCase));
+    }
+
+    private static IReadOnlyList<Value> GetExternalInputs(OperationGraph graph)
+    {
+        var inputs = new HashSet<Value>(ReferenceEqualityComparer.Instance);
+
+        foreach (var operation in graph.Operations)
+        {
+            foreach (var input in operation.Inputs)
+            {
+                if (graph.GetProducer(input) is null)
+                {
+                    inputs.Add(input);
+                }
+            }
+        }
+
+        return inputs.ToArray();
+    }
+
+    private static IReadOnlyList<Value> GetTargetOutputs(
+        OperationGraph graph,
+        TranslationContext context)
+    {
+        var outputs = new HashSet<Value>(ReferenceEqualityComparer.Instance);
+
+        foreach (var value in context.Properties.Values.Cast<Value>()
+            .Concat(context.Items.Values)
+            .Concat(context.TargetConditions.Values))
+        {
+            if (graph.GetProducer(value) is not null)
+            {
+                outputs.Add(value);
+            }
+        }
+
+        return outputs.ToArray();
     }
 
     private static void TranslatePropertyGroup(

@@ -28,12 +28,23 @@ internal static class CliRunner
             var result = new MSBuildProjectTranslator()
                 .Translate(projectPath, targetName);
 
-            AsciiGraphWriter.Write(result.Graph, Console.Out);
+            var targetNames = new Dictionary<Target, string>(
+                ReferenceEqualityComparer.Instance);
+
+            foreach (var (name, target) in result.Targets)
+            {
+                targetNames.Add(target, name);
+            }
+
+            AsciiGraphWriter.Write(
+                result.Graph,
+                Console.Out,
+                targetNames);
 
             var values = new ValueStore();
 
             await new OperationGraphExecutor().ExecuteAsync(
-                result.Graph,
+                result.Targets[targetName].Body,
                 values,
                 TranslatedOperationEvaluator.EvaluateAsync);
 

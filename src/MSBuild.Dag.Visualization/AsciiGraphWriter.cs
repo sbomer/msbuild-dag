@@ -23,20 +23,6 @@ public static class AsciiGraphWriter
     {
         ArgumentNullException.ThrowIfNull(graph);
 
-        var adapter = BuildGraphRenderingAdapter.Create(graph, targetNames);
-        return Render(
-            adapter.Graph,
-            "BuildGraph",
-            adapter.GetLabel,
-            contentProvider: null);
-    }
-
-    public static string RenderExpanded(
-        BuildGraph graph,
-        IReadOnlyDictionary<Target, string>? targetNames = null)
-    {
-        ArgumentNullException.ThrowIfNull(graph);
-
         var adapter = BuildGraphRenderingAdapter.Create(
             graph,
             targetNames,
@@ -46,6 +32,20 @@ public static class AsciiGraphWriter
             "BuildGraph",
             adapter.GetLabel,
             adapter.GetContent);
+    }
+
+    public static string RenderCompact(
+        BuildGraph graph,
+        IReadOnlyDictionary<Target, string>? targetNames = null)
+    {
+        ArgumentNullException.ThrowIfNull(graph);
+
+        var adapter = BuildGraphRenderingAdapter.Create(graph, targetNames);
+        return Render(
+            adapter.Graph,
+            "BuildGraph",
+            adapter.GetLabel,
+            contentProvider: null);
     }
 
     public static void Write(OperationGraph graph, TextWriter writer)
@@ -65,23 +65,6 @@ public static class AsciiGraphWriter
     {
         ArgumentNullException.ThrowIfNull(graph);
 
-        var adapter = BuildGraphRenderingAdapter.Create(graph, targetNames);
-        Write(
-            adapter.Graph,
-            writer,
-            "BuildGraph",
-            adapter.GetLabel,
-            contentProvider: null);
-    }
-
-    public static void WriteExpanded(
-        BuildGraph graph,
-        TextWriter writer,
-        IReadOnlyDictionary<Target, string>? targetNames = null)
-    {
-        ArgumentNullException.ThrowIfNull(graph);
-        ArgumentNullException.ThrowIfNull(writer);
-
         var adapter = BuildGraphRenderingAdapter.Create(
             graph,
             targetNames,
@@ -92,6 +75,23 @@ public static class AsciiGraphWriter
             "BuildGraph",
             adapter.GetLabel,
             adapter.GetContent);
+    }
+
+    public static void WriteCompact(
+        BuildGraph graph,
+        TextWriter writer,
+        IReadOnlyDictionary<Target, string>? targetNames = null)
+    {
+        ArgumentNullException.ThrowIfNull(graph);
+        ArgumentNullException.ThrowIfNull(writer);
+
+        var adapter = BuildGraphRenderingAdapter.Create(graph, targetNames);
+        Write(
+            adapter.Graph,
+            writer,
+            "BuildGraph",
+            adapter.GetLabel,
+            contentProvider: null);
     }
 
     private static string Render(

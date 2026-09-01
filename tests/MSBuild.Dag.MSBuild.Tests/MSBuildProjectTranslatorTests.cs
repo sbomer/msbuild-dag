@@ -14,13 +14,16 @@ public sealed class MSBuildProjectTranslatorTests
             "ToyBuild.proj");
 
         var result = new MSBuildProjectTranslator().Translate(projectPath, "Build");
+        var graph = result.Targets["Build"].Body;
 
-        var compile = Assert.Single(result.Graph.Operations.OfType<ToyCompileOperation>());
-        var concat = Assert.Single(result.Graph.Operations.OfType<ConcatItemsOperation>());
+        Assert.Same(result.Targets["Build"], Assert.Single(result.Graph.Targets));
+
+        var compile = Assert.Single(graph.Operations.OfType<ToyCompileOperation>());
+        var concat = Assert.Single(graph.Operations.OfType<ConcatItemsOperation>());
         var condition = Assert.Single(
-            result.Graph.Operations.OfType<EqualOperation<string>>());
+            graph.Operations.OfType<EqualOperation<string>>());
         var guard = Assert.Single(
-            result.Graph.Operations.OfType<ConditionGuardOperation>());
+            graph.Operations.OfType<ConditionGuardOperation>());
 
         Assert.Same(concat.Result, compile.Sources);
         Assert.Same(compile.Assembly, result.Properties["AssemblyPath"]);
@@ -29,15 +32,15 @@ public sealed class MSBuildProjectTranslatorTests
         Assert.Same(condition.Result, guard.Condition);
 
         Assert.Contains(
-            result.Graph.GetDependencies(compile),
+            graph.GetDependencies(compile),
             operation => ReferenceEquals(operation, concat));
 
         var configuration = Assert.Single(
-            result.Graph.Operations
+            graph.Operations
                 .OfType<ConstantOperation<string>>(),
             operation => operation.Content == "Debug");
         Assert.Contains(
-            result.Graph.GetDependencies(configuration),
+            graph.GetDependencies(configuration),
             operation => operation is ConditionGuardOperation);
         Assert.Same(guard.Result, configuration.Guard);
         Assert.Null(configuration.OrderInput);
@@ -45,7 +48,7 @@ public sealed class MSBuildProjectTranslatorTests
         Assert.Same(configuration.Result, configuration.Outputs[1]);
 
         var appendedItems = Assert.Single(
-            result.Graph.Operations
+            graph.Operations
                 .OfType<ConstantOperation<IReadOnlyList<string>>>(),
             operation => operation.Content.SequenceEqual(["Program.cs"]));
 
@@ -86,12 +89,13 @@ public sealed class MSBuildProjectTranslatorTests
             "Condition.proj");
 
         var result = new MSBuildProjectTranslator().Translate(projectPath, "Build");
+        var graph = result.Targets["Build"].Body;
 
         var comparison = Assert.Single(
-            result.Graph.Operations.OfType<NotEqualOperation<string>>());
+            graph.Operations.OfType<NotEqualOperation<string>>());
 
         Assert.Same(comparison.Result, result.TargetConditions["Build"]);
-        Assert.Equal(2, result.Graph.GetDependencies(comparison).Count);
+        Assert.Equal(2, graph.GetDependencies(comparison).Count);
     }
 
     [Fact]
@@ -108,7 +112,7 @@ public sealed class MSBuildProjectTranslatorTests
         var values = new ValueStore();
 
         await new OperationGraphExecutor().ExecuteAsync(
-            result.Graph,
+            result.Targets["Build"].Body,
             values,
             evaluator.EvaluateAsync);
 
@@ -130,7 +134,7 @@ public sealed class MSBuildProjectTranslatorTests
         var evaluator = CreateEvaluator();
 
         await new OperationGraphExecutor().ExecuteAsync(
-            result.Graph,
+            result.Targets["AfterSkippedBuild"].Body,
             values,
             evaluator.EvaluateAsync);
 
