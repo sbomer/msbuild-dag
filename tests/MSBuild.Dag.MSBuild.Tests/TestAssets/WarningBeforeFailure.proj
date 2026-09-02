@@ -2,8 +2,7 @@
   <Target Name="Dormant"
           DependsOnTargets="Missing" />
 
-  <Target Name="Injected"
-          AfterTargets="$(DynamicAnchor)" />
-
-  <Target Name="Build" />
+  <Target Name="Build">
+    <Exec Command="true" />
+  </Target>
 </Project>

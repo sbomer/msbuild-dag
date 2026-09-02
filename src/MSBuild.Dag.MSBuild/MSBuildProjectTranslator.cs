@@ -350,6 +350,7 @@ public sealed class MSBuildProjectTranslator
         var epilogues = new Dictionary<MSBuildTarget, List<MSBuildTarget>>(
             ReferenceEqualityComparer.Instance);
         var missingDependencies = new List<MissingTargetDependency>();
+        var missingRegistrations = new List<MissingTargetRegistration>();
 
         foreach (var target in targets)
         {
@@ -366,36 +367,51 @@ public sealed class MSBuildProjectTranslator
             epilogues.Add(target, []);
         }
 
-        var warnings = missingDependencies
-            .Select(missing =>
-                $"Target '{missing.DeclaringTarget.Name}' references missing " +
-                $"target '{missing.TargetName}' through DependsOnTargets.")
-            .ToArray();
-
-        foreach (var warning in warnings)
-        {
-            reportWarning?.Invoke(warning);
-        }
-
         foreach (var target in targets)
         {
             foreach (var anchor in ResolveTargetList(
                 target,
-                target.BeforeTargets,
+                ExpandTargetReferences(
+                    project,
+                    target,
+                    target.BeforeTargets,
+                    nameof(target.BeforeTargets),
+                    propertyAssignments),
                 nameof(target.BeforeTargets),
-                targetsByName))
+                targetsByName,
+                missingRegistrations))
             {
                 AddDistinct(preludes[anchor], target);
             }
 
             foreach (var anchor in ResolveTargetList(
                 target,
-                target.AfterTargets,
+                ExpandTargetReferences(
+                    project,
+                    target,
+                    target.AfterTargets,
+                    nameof(target.AfterTargets),
+                    propertyAssignments),
                 nameof(target.AfterTargets),
-                targetsByName))
+                targetsByName,
+                missingRegistrations))
             {
                 AddDistinct(epilogues[anchor], target);
             }
+        }
+
+        var warnings = missingDependencies.Select(missing =>
+                $"Target '{missing.DeclaringTarget.Name}' references missing " +
+                $"target '{missing.TargetName}' through DependsOnTargets.")
+            .Concat(missingRegistrations.Select(missing =>
+                $"Target '{missing.DeclaringTarget.Name}' references missing " +
+                $"target '{missing.TargetName}' through " +
+                $"{missing.AttributeName}."))
+            .ToArray();
+
+        foreach (var warning in warnings)
+        {
+            reportWarning?.Invoke(warning);
         }
 
         EnsureSourceOrchestrationAcyclic(targets, preludes, epilogues);
@@ -631,10 +647,23 @@ public sealed class MSBuildProjectTranslator
         ProjectInstance project,
         MSBuildTarget target,
         IReadOnlyDictionary<string, IReadOnlyList<MSBuildTarget>>
+            propertyAssignments) =>
+        ExpandTargetReferences(
+            project,
+            target,
+            target.DependsOnTargets,
+            nameof(target.DependsOnTargets),
+            propertyAssignments);
+
+    private static string ExpandTargetReferences(
+        ProjectInstance project,
+        MSBuildTarget target,
+        string expression,
+        string attributeName,
+        IReadOnlyDictionary<string, IReadOnlyList<MSBuildTarget>>
             propertyAssignments)
     {
-        foreach (Match match in s_propertyReference.Matches(
-            target.DependsOnTargets))
+        foreach (Match match in s_propertyReference.Matches(expression))
         {
             var propertyName = match.Groups["property"].Value;
 
@@ -646,14 +675,14 @@ public sealed class MSBuildProjectTranslator
             }
 
             throw Unsupported(
-                $"DependsOnTargets on target '{target.Name}' references " +
+                $"{attributeName} on target '{target.Name}' references " +
                 $"property '{propertyName}', which is assigned by target " +
-                $"{FormatTargetNames(assigningTargets)}. Target dependencies " +
+                $"{FormatTargetNames(assigningTargets)}. Target orchestration " +
                 "must be fixed after project evaluation and cannot depend on " +
                 "target execution");
         }
 
-        return project.ExpandString(target.DependsOnTargets);
+        return project.ExpandString(expression);
     }
 
     private static string FormatTargetNames(
@@ -682,15 +711,9 @@ public sealed class MSBuildProjectTranslator
         MSBuildTarget declaringTarget,
         string expression,
         string attributeName,
-        IReadOnlyDictionary<string, MSBuildTarget> targetsByName)
+        IReadOnlyDictionary<string, MSBuildTarget> targetsByName,
+        List<MissingTargetRegistration> missingRegistrations)
     {
-        if (ContainsReference(expression))
-        {
-            throw Unsupported(
-                $"non-literal {attributeName} on target " +
-                $"'{declaringTarget.Name}'");
-        }
-
         var result = new List<MSBuildTarget>();
 
         foreach (var targetName in expression.Split(
@@ -700,10 +723,12 @@ public sealed class MSBuildProjectTranslator
         {
             if (!targetsByName.TryGetValue(targetName, out var target))
             {
-                throw MissingTarget(
-                    declaringTarget,
-                    targetName,
-                    attributeName);
+                missingRegistrations.Add(
+                    new MissingTargetRegistration(
+                        declaringTarget,
+                        targetName,
+                        attributeName));
+                continue;
             }
 
             AddDistinct(result, target);
@@ -739,14 +764,6 @@ public sealed class MSBuildProjectTranslator
 
         return result;
     }
-
-    private static InvalidOperationException MissingTarget(
-        MSBuildTarget declaringTarget,
-        string targetName,
-        string attributeName) =>
-        new(
-            $"Target '{declaringTarget.Name}' references missing target " +
-            $"'{targetName}' through {attributeName}.");
 
     private static void AddDistinct(
         List<MSBuildTarget> targets,
@@ -977,6 +994,11 @@ public sealed class MSBuildProjectTranslator
     private sealed record MissingTargetDependency(
         MSBuildTarget DeclaringTarget,
         string TargetName);
+
+    private sealed record MissingTargetRegistration(
+        MSBuildTarget DeclaringTarget,
+        string TargetName,
+        string AttributeName);
 
     private sealed record TargetStateAccess(
         IReadOnlySet<string> ReadProperties,

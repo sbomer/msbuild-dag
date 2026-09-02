@@ -1,0 +1,16 @@
+<Project>
+  <PropertyGroup>
+    <Anchor>Build</Anchor>
+  </PropertyGroup>
+
+  <Target Name="RewriteAnchor">
+    <PropertyGroup>
+      <Anchor>Other</Anchor>
+    </PropertyGroup>
+  </Target>
+
+  <Target Name="Injected"
+          BeforeTargets="$(Anchor)" />
+  <Target Name="Build" />
+  <Target Name="Other" />
+</Project>

@@ -128,17 +128,21 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Fact]
-    public void LoadsSdkStyleProjectBeforeReportingUnsupportedConstruct()
+    public void RejectsSdkStyleProjectWithGlobalTargetOrderCycle()
     {
         var projectPath = Path.Combine(
             AppContext.BaseDirectory,
             "TestAssets",
             "SdkStyle.csproj");
 
-        var exception = Assert.Throws<NotSupportedException>(
+        var exception = Assert.Throws<InvalidOperationException>(
             () => new MSBuildProjectTranslator().Translate(projectPath, "Build"));
 
-        Assert.Contains("restricted MSBuild translator", exception.Message);
+        Assert.Contains("Target orchestration must be acyclic", exception.Message);
+        Assert.Contains(
+            "'Build' -> '_PackAsBuildAfterTarget' -> 'Pack' -> " +
+            "'GenerateNuspec' -> 'Build'",
+            exception.Message);
     }
 
     [Fact]
@@ -282,16 +286,40 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Theory]
-    [InlineData("DynamicBefore.proj", "BeforeTargets")]
-    [InlineData("DynamicAfter.proj", "AfterTargets")]
-    public void RejectsNonLiteralTargetRegistrations(
+    [InlineData("RuntimeBefore.proj", "BeforeTargets")]
+    [InlineData("RuntimeAfter.proj", "AfterTargets")]
+    public void RejectsTargetRegistrationsComputedDuringTargetExecution(
         string assetName,
         string attributeName)
     {
         var exception = Assert.Throws<NotSupportedException>(
             () => TranslateAsset(assetName, "Build"));
 
-        Assert.Contains($"non-literal {attributeName}", exception.Message);
+        Assert.Contains(
+            $"{attributeName} on target 'Injected' references property 'Anchor'",
+            exception.Message);
+        Assert.Contains("assigned by target 'RewriteAnchor'", exception.Message);
+        Assert.Contains("must be fixed after project evaluation", exception.Message);
+    }
+
+    [Fact]
+    public void ExpandsBeforeTargetsFromEvaluatedProperty()
+    {
+        var result = TranslateAsset("DynamicBefore.proj", "Build");
+
+        Assert.Equal(
+            [result.Targets["Before"]],
+            result.Targets["Build"].Prelude);
+    }
+
+    [Fact]
+    public void ExpandsAfterTargetsFromEvaluatedProperty()
+    {
+        var result = TranslateAsset("DynamicAfter.proj", "Build");
+
+        Assert.Equal(
+            [result.Targets["After"]],
+            result.Targets["Build"].Epilogue);
     }
 
     [Fact]
@@ -315,12 +343,12 @@ public sealed class MSBuildProjectTranslatorTests
     [Theory]
     [InlineData("MissingBeforeTarget.proj")]
     [InlineData("MissingAfterTarget.proj")]
-    public void RejectsMissingTargetRegistrationAnchor(string assetName)
+    public void WarnsAboutMissingTargetRegistrationAnchor(string assetName)
     {
-        var exception = Assert.Throws<InvalidOperationException>(
-            () => TranslateAsset(assetName, "Build"));
+        var result = TranslateAsset(assetName, "Build");
+        var warning = Assert.Single(result.Warnings);
 
-        Assert.Contains("missing target 'Missing'", exception.Message);
+        Assert.Contains("missing target 'Missing'", warning);
     }
 
     [Fact]
@@ -361,7 +389,7 @@ public sealed class MSBuildProjectTranslatorTests
 
         Assert.Single(warnings);
         Assert.Contains("missing target 'Missing'", warnings[0]);
-        Assert.Contains("non-literal AfterTargets", exception.Message);
+        Assert.Contains("task 'Exec'", exception.Message);
     }
 
     [Fact]
