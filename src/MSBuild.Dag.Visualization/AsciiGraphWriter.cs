@@ -579,6 +579,7 @@ public static class AsciiGraphWriter
 
             EnsureEdgesAdvanceRanks(edges);
             MoveNodesTowardConsumers(nodes, edges);
+            MoveTargetOutputsToFinalRank(nodes);
             EnsureEdgesAdvanceRanks(edges);
 
             var rowWidths = nodes
@@ -705,6 +706,20 @@ public static class AsciiGraphWriter
                     .OrderBy(node => GetConsumerPositionHint(node, edges))
                     .ThenBy(node => node.Order)
                     .ToArray();
+
+                if (rankNodes.All(node => node.Kind is NodeKind.TargetInput))
+                {
+                    PositionTargetInputsTowardConsumers(
+                        rank
+                            .OrderBy(node => HasLongOutgoingEdge(node, edges))
+                            .ThenBy(node => GetConsumerPositionHint(node, edges))
+                            .ThenBy(node => node.Order)
+                            .ToArray(),
+                        edges,
+                        contentWidth);
+                    continue;
+                }
+
                 var left =
                     (contentWidth - rowWidths[rank.Key]) / 2;
 
@@ -715,6 +730,13 @@ public static class AsciiGraphWriter
                 }
             }
         }
+
+        private static bool HasLongOutgoingEdge(
+            Node node,
+            IReadOnlyList<Edge> edges) =>
+            edges.Any(edge =>
+                ReferenceEquals(edge.Source, node) &&
+                edge.Target.Rank > node.Rank + 1);
 
         private static double GetConsumerPositionHint(
             Node node,
@@ -728,6 +750,26 @@ public static class AsciiGraphWriter
                 ? node.Left
                 : outgoing.Average(
                     edge => edge.Target.GetInputX(edge.TargetSlot));
+        }
+
+        private static void PositionTargetInputsTowardConsumers(
+            IReadOnlyList<Node> inputs,
+            IReadOnlyList<Edge> edges,
+            int contentWidth)
+        {
+            var minimumLeft = 0;
+
+            foreach (var input in inputs)
+            {
+                var desiredLeft =
+                    (int)Math.Round(GetConsumerPositionHint(input, edges)) -
+                    (input.Width / 2);
+                input.Left = Math.Clamp(
+                    Math.Max(desiredLeft, minimumLeft),
+                    0,
+                    contentWidth - input.Width);
+                minimumLeft = input.Right + 2;
+            }
         }
 
         private static Dictionary<int, int> AssignRouteLanes(
@@ -915,6 +957,11 @@ public static class AsciiGraphWriter
         {
             foreach (var node in nodes.OrderByDescending(node => node.Rank))
             {
+                if (node.Kind is NodeKind.TargetInput)
+                {
+                    continue;
+                }
+
                 var outgoing = edges
                     .Where(edge => ReferenceEquals(edge.Source, node))
                     .ToArray();
@@ -935,6 +982,22 @@ public static class AsciiGraphWriter
                 {
                     node.Rank = latestRank;
                 }
+            }
+        }
+
+        private static void MoveTargetOutputsToFinalRank(
+            IReadOnlyList<Node> nodes)
+        {
+            var outputRank = nodes
+                .Where(node => node.Kind is not NodeKind.TargetOutput)
+                .Select(node => node.Rank)
+                .DefaultIfEmpty(0)
+                .Max() + 1;
+
+            foreach (var output in nodes.Where(
+                node => node.Kind is NodeKind.TargetOutput))
+            {
+                output.Rank = outputRank;
             }
         }
 

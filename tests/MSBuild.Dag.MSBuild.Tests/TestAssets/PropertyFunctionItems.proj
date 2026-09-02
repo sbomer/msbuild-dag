@@ -1,0 +1,11 @@
+<Project>
+  <PropertyGroup>
+    <Subset>clr+libs-native</Subset>
+  </PropertyGroup>
+
+  <Target Name="Build">
+    <ItemGroup>
+      <SpecifiedSubsetName Include="$([MSBuild]::Unescape($(Subset.Replace('+', ';').Replace('-', ';'))))" />
+    </ItemGroup>
+  </Target>
+</Project>

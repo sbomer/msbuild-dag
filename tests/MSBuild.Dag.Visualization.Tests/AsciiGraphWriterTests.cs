@@ -288,6 +288,70 @@ public sealed class AsciiGraphWriterTests
                 line.Contains('┐'));
     }
 
+    [Fact]
+    public void ExpandedBuildProgramKeepsStaggeredInputsInEntryRank()
+    {
+        var firstInput = new Value<string>();
+        var secondInput = new Value<string>();
+        var thirdInput = new Value<string>();
+        var firstResult = new Value<string>();
+        var secondResult = new Value<string>();
+        var output = new Value<string>();
+        var first = new TestOperation([firstInput], [firstResult]);
+        var second = new TestOperation(
+            [firstResult, secondInput],
+            [secondResult]);
+        var third = new TestOperation(
+            [secondResult, thirdInput],
+            [output]);
+        var target = new Target(
+            [firstInput, secondInput, thirdInput],
+            [output],
+            new OperationGraph([first, second, third]));
+
+        var result = AsciiGraphWriter.Render(
+            new BuildProgram([target]));
+
+        Assert.Contains("i0", result);
+        Assert.Contains("i1", result);
+        Assert.Contains("i2", result);
+    }
+
+    [Fact]
+    public void ExpandedBuildProgramConnectsEarlyOutputToTargetBoundary()
+    {
+        var input = new Value<string>();
+        var output = new Value<string>();
+        var intermediate = new Value<string>();
+        var ignored = new Value<string>();
+        var producer = new TestOperation([input], [output]);
+        var later = new TestOperation([output], [intermediate]);
+        var last = new TestOperation([intermediate], [ignored]);
+        var target = new Target(
+            [input],
+            [output],
+            new OperationGraph([producer, later, last]));
+
+        var lines = AsciiGraphWriter.Render(
+                new BuildProgram([target]))
+            .Split(Environment.NewLine);
+        var targetBottom = Array.FindLastIndex(
+            lines,
+            line => line.StartsWith('└') && line.Contains('┼'));
+        var outputPorts = lines[targetBottom]
+            .Select((character, index) => (character, index))
+            .Where(entry => entry.character == '┼')
+            .Select(entry => entry.index)
+            .ToArray();
+
+        Assert.NotEmpty(outputPorts);
+        Assert.All(
+            outputPorts,
+            outputPort => Assert.NotEqual(
+                ' ',
+                lines[targetBottom - 1][outputPort]));
+    }
+
     private static Target EmptyTarget() =>
         new([], [], new OperationGraph([]));
 

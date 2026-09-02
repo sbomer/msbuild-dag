@@ -30,6 +30,26 @@ internal static class TranslatedOperationEvaluator
                             .ToArray());
                     return ValueTask.CompletedTask;
                 })
+            .Add<ExpandItemsExpressionOperation>(
+                static (operation, values, _) =>
+                {
+                    var expanded = operation.Replacements.Aggregate(
+                        values.Get(operation.Source),
+                        static (current, replacement) =>
+                            current.Replace(
+                                replacement.OldValue,
+                                replacement.NewValue,
+                                StringComparison.Ordinal));
+                    IReadOnlyList<string> items = Microsoft.Build.Evaluation
+                        .ProjectCollection
+                        .Unescape(expanded)
+                        .Split(
+                            ';',
+                            StringSplitOptions.RemoveEmptyEntries |
+                            StringSplitOptions.TrimEntries);
+                    values.Set(operation.Result, items);
+                    return ValueTask.CompletedTask;
+                })
             .Add<ToyCompileOperation>(
                 static (operation, values, _) =>
                 {

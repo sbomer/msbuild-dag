@@ -15,6 +15,12 @@ public sealed class MSBuildProjectTranslator
     private static readonly Regex s_propertyReference = new(
         @"\$\((?<property>[^()]+)\)",
         RegexOptions.CultureInvariant);
+    private static readonly Regex s_unescapeItemsExpression = new(
+        @"^\$\(\[MSBuild\]::Unescape\(\$\((?<property>[^.()]+)(?<replacements>(?:\.Replace\('[^']*',\s*'[^']*'\))+)\)\)\)$",
+        RegexOptions.CultureInvariant);
+    private static readonly Regex s_stringReplacement = new(
+        @"\.Replace\('(?<old>[^']*)',\s*'(?<new>[^']*)'\)",
+        RegexOptions.CultureInvariant);
 
     public TranslationResult Translate(
         string projectPath,
@@ -568,6 +574,13 @@ public sealed class MSBuildProjectTranslator
             {
                 AddItemRead(itemType);
             }
+            else if (TryParseUnescapeItemsExpression(
+                expression,
+                out var propertyName,
+                out _))
+            {
+                AddPropertyRead(propertyName);
+            }
         }
 
         void AddPropertyRead(string propertyName)
@@ -976,6 +989,30 @@ public sealed class MSBuildProjectTranslator
         return false;
     }
 
+    private static bool TryParseUnescapeItemsExpression(
+        string expression,
+        out string propertyName,
+        out IReadOnlyList<StringReplacement> replacements)
+    {
+        var expressionMatch = s_unescapeItemsExpression.Match(expression);
+
+        if (!expressionMatch.Success)
+        {
+            propertyName = string.Empty;
+            replacements = [];
+            return false;
+        }
+
+        propertyName = expressionMatch.Groups["property"].Value;
+        replacements = s_stringReplacement.Matches(
+                expressionMatch.Groups["replacements"].Value)
+            .Select(match => new StringReplacement(
+                match.Groups["old"].Value,
+                match.Groups["new"].Value))
+            .ToArray();
+        return true;
+    }
+
     private static NotSupportedException Unsupported(string construct) =>
         new($"The restricted MSBuild translator does not support {construct}.");
 
@@ -1110,6 +1147,19 @@ public sealed class MSBuildProjectTranslator
             if (TryGetReference(expression, "@(", out var itemType))
             {
                 return GetItems(itemType);
+            }
+
+            if (TryParseUnescapeItemsExpression(
+                expression,
+                out var propertyName,
+                out var replacements))
+            {
+                var operation = new ExpandItemsExpressionOperation(
+                    GetProperty(propertyName),
+                    replacements,
+                    CreateControl());
+                AddOperation(operation);
+                return operation.Result;
             }
 
             if (ContainsReference(expression))

@@ -1,25 +1,27 @@
 <Project>
-  <PropertyGroup>
-    <Configuration>Release</Configuration>
-    <BuildDependsOn>Prepare</BuildDependsOn>
-  </PropertyGroup>
-
-  <ItemGroup>
-    <Compile Include="Program.cs" />
-  </ItemGroup>
-
-  <Target Name="Prepare">
     <PropertyGroup>
-      <Configuration>Debug</Configuration>
+        <Key>V0</Key>
+        <Subset>clr+libs-native</Subset>
     </PropertyGroup>
-  </Target>
 
-  <Target Name="Build"
-          DependsOnTargets="$(BuildDependsOn)">
-    <ToyCompile Sources="@(Compile)"
-                Configuration="$(Configuration)">
-      <Output TaskParameter="Assembly"
-              PropertyName="AssemblyPath" />
-    </ToyCompile>
-  </Target>
+    <Target Name="A">
+        <PropertyGroup>
+            <Key>V1</Key>
+        </PropertyGroup>
+    </Target>
+
+    <Target Name="B"
+            AfterTargets="A">
+        <ItemGroup>
+            <SpecifiedSubsetName Include="$([MSBuild]::Unescape($(Subset.Replace('+', ';').Replace('-', ';'))))" />
+        </ItemGroup>
+        <Message Text="$(Key)" />
+        <PropertyGroup>
+            <Key>V2</Key>
+        </PropertyGroup>
+    </Target>
+
+    <Target Name="Build"
+            DependsOnTargets="A">
+    </Target>
 </Project>

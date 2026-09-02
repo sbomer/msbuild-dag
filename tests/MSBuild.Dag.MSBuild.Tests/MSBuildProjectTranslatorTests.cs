@@ -217,6 +217,42 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Fact]
+    public async Task TranslatesUnescapedPropertyFunctionItemExpression()
+    {
+        var result = TranslateAsset("PropertyFunctionItems.proj", "Build");
+        var build = result.Targets["Build"];
+        var expansion = Assert.Single(
+            build.Body.Operations.OfType<ExpandItemsExpressionOperation>());
+        var binding = Assert.IsAssignableFrom<IStateBindingOperation>(
+            build.Body.GetProducer(expansion.Source));
+        var values = new ValueStore();
+
+        await new BuildProgramExecutor(
+            result.Program,
+            values,
+            CreateEvaluator().EvaluateAsync)
+            .ExecuteAsync(build);
+
+        Assert.Equal(
+            [
+                new StringReplacement("+", ";"),
+                new StringReplacement("-", ";"),
+            ],
+            expansion.Replacements);
+        Assert.Same(
+            result.Definition.Evaluation.Initializations.Single(
+                initialization => ReferenceEquals(
+                    initialization.Location,
+                    result.TargetDefinitions["Build"].Reads
+                        .OfType<StateRead<string>>()
+                        .Single().Location)).InitialValue.Value,
+            binding.Source);
+        Assert.Equal(
+            ["clr", "libs", "native"],
+            values.Get(result.Items["SpecifiedSubsetName"]));
+    }
+
+    [Fact]
     public void RejectsUnorderedPropertyStateConflict()
     {
         var exception = Assert.Throws<InvalidOperationException>(
@@ -545,6 +581,25 @@ public sealed class MSBuildProjectTranslatorTests
                         values.Get(operation.ExistingItems)
                             .Concat(values.Get(operation.AppendedItems))
                             .ToArray());
+                    return ValueTask.CompletedTask;
+                })
+            .Add<ExpandItemsExpressionOperation>(
+                static (operation, values, _) =>
+                {
+                    var expanded = operation.Replacements.Aggregate(
+                        values.Get(operation.Source),
+                        static (current, replacement) =>
+                            current.Replace(
+                                replacement.OldValue,
+                                replacement.NewValue,
+                                StringComparison.Ordinal));
+                    IReadOnlyList<string> items = Microsoft.Build.Evaluation
+                        .ProjectCollection.Unescape(expanded)
+                        .Split(
+                            ';',
+                            StringSplitOptions.RemoveEmptyEntries |
+                            StringSplitOptions.TrimEntries);
+                    values.Set(operation.Result, items);
                     return ValueTask.CompletedTask;
                 })
             .Add<ToyCompileOperation>(
