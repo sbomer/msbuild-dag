@@ -5,15 +5,18 @@ namespace MSBuild.Dag.Visualization;
 internal sealed class TargetBodyRenderingAdapter
 {
     private readonly IReadOnlyDictionary<Operation, string> _labels;
+    private readonly Func<Operation, string?>? _labelProvider;
 
     private TargetBodyRenderingAdapter(
         OperationGraph graph,
         IReadOnlyDictionary<Operation, string> labels,
+        Func<Operation, string?>? labelProvider,
         IReadOnlyList<Operation> inputs,
         IReadOnlyList<Operation> outputs)
     {
         Graph = graph;
         _labels = labels;
+        _labelProvider = labelProvider;
         Inputs = inputs;
         Outputs = outputs;
     }
@@ -24,10 +27,20 @@ internal sealed class TargetBodyRenderingAdapter
 
     public IReadOnlyList<Operation> Outputs { get; }
 
-    public string GetLabel(Operation operation) =>
-        _labels.GetValueOrDefault(operation) ?? GetTypeDisplayName(operation.GetType());
+    public string GetLabel(Operation operation)
+    {
+        if (_labels.TryGetValue(operation, out var label))
+        {
+            return label;
+        }
 
-    public static TargetBodyRenderingAdapter Create(Target target)
+        return _labelProvider?.Invoke(operation) ??
+            GetTypeDisplayName(operation.GetType());
+    }
+
+    public static TargetBodyRenderingAdapter Create(
+        Target target,
+        Func<Operation, string?>? labelProvider)
     {
         var operations = new List<Operation>(
             target.Inputs.Count +
@@ -59,6 +72,7 @@ internal sealed class TargetBodyRenderingAdapter
         return new TargetBodyRenderingAdapter(
             new OperationGraph(operations),
             labels,
+            labelProvider,
             inputs,
             outputs);
     }

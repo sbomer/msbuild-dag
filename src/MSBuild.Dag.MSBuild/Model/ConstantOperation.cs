@@ -2,12 +2,19 @@ using MSBuild.Dag.Core;
 
 namespace MSBuild.Dag.MSBuild;
 
+public interface IConstantOperation
+{
+    object? Content { get; }
+}
+
 public sealed class ConstantOperation<T>(
     T content,
     OperationControl? control = null)
-    : Operation, IGuardedOperation, IOrderedOperation
+    : Operation, IConstantOperation, IGuardedOperation, IOrderedOperation
 {
     public T Content { get; } = content;
+
+    object? IConstantOperation.Content => Content;
 
     public Value<GuardToken>? Guard => control?.Guard;
 

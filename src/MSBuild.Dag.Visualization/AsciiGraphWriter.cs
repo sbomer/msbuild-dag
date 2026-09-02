@@ -33,14 +33,16 @@ public static class AsciiGraphWriter
 
     public static string Render(
         BuildProgram program,
-        IReadOnlyDictionary<Target, string>? targetNames = null)
+        IReadOnlyDictionary<Target, string>? targetNames = null,
+        Func<Operation, string?>? operationLabelProvider = null)
     {
         ArgumentNullException.ThrowIfNull(program);
 
         var adapter = BuildProgramRenderingAdapter.Create(
             program,
             targetNames,
-            includeTargetBodies: true);
+            includeTargetBodies: true,
+            operationLabelProvider);
         return Render(
             adapter.Graph,
             "BuildProgram",
@@ -75,14 +77,16 @@ public static class AsciiGraphWriter
     public static void Write(
         BuildProgram program,
         TextWriter writer,
-        IReadOnlyDictionary<Target, string>? targetNames = null)
+        IReadOnlyDictionary<Target, string>? targetNames = null,
+        Func<Operation, string?>? operationLabelProvider = null)
     {
         ArgumentNullException.ThrowIfNull(program);
 
         var adapter = BuildProgramRenderingAdapter.Create(
             program,
             targetNames,
-            includeTargetBodies: true);
+            includeTargetBodies: true,
+            operationLabelProvider);
         Write(
             adapter.Graph,
             writer,
@@ -141,7 +145,9 @@ public static class AsciiGraphWriter
         WriteLayout(layout, writer);
     }
 
-    internal static GraphNodeContent RenderTargetBody(Target target)
+    internal static GraphNodeContent RenderTargetBody(
+        Target target,
+        Func<Operation, string?>? operationLabelProvider)
     {
         if (target.Body.Operations.Count == 0)
         {
@@ -151,7 +157,9 @@ public static class AsciiGraphWriter
                 []);
         }
 
-        var adapter = TargetBodyRenderingAdapter.Create(target);
+        var adapter = TargetBodyRenderingAdapter.Create(
+            target,
+            operationLabelProvider);
         var layout = Layout.Create(
             adapter.Graph,
             adapter.GetLabel,

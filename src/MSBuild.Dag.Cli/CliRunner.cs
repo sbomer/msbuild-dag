@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Build.Exceptions;
 using MSBuild.Dag.Core;
 using MSBuild.Dag.Execution;
@@ -42,7 +43,8 @@ internal static class CliRunner
             AsciiGraphWriter.Write(
                 result.Program,
                 Console.Out,
-                targetNames);
+                targetNames,
+                GetOperationLabel);
 
             var values = new ValueStore();
             var executor = new BuildProgramExecutor(
@@ -125,4 +127,51 @@ internal static class CliRunner
         values.IsAvailable(value)
             ? string.Join("; ", values.Get(value))
             : "(unavailable)";
+
+    private static string? GetOperationLabel(Operation operation)
+    {
+        if (operation is IConstantOperation constant)
+        {
+            return FormatConstant(constant.Content);
+        }
+
+        if (operation is ISelectOperation)
+        {
+            return "?:";
+        }
+
+        if (operation is IStateBindingOperation)
+        {
+            return "state read";
+        }
+
+        if (!operation.GetType().IsGenericType)
+        {
+            return null;
+        }
+
+        var operationType = operation.GetType().GetGenericTypeDefinition();
+
+        if (operationType == typeof(EqualOperation<>))
+        {
+            return "==";
+        }
+
+        return operationType == typeof(NotEqualOperation<>)
+            ? "!="
+            : null;
+    }
+
+    private static string FormatConstant(object? content) =>
+        content switch
+        {
+            null => "null",
+            string value => $"'{value.Replace("'", "''", StringComparison.Ordinal)}'",
+            IReadOnlyList<string> items =>
+                $"@({string.Join("; ", items)})",
+            bool value => value ? "true" : "false",
+            IFormattable value =>
+                value.ToString(format: null, CultureInfo.InvariantCulture),
+            _ => content.ToString() ?? string.Empty,
+        };
 }

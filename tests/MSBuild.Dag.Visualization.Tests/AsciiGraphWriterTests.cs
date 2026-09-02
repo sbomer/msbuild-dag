@@ -218,6 +218,27 @@ public sealed class AsciiGraphWriterTests
     }
 
     [Fact]
+    public void ExpandedBuildProgramUsesProvidedBodyOperationLabels()
+    {
+        var value = new Value<string>();
+        var operation = new TestOperation([], [value]);
+        var target = new Target(
+            [],
+            [value],
+            new OperationGraph([operation]));
+
+        var result = AsciiGraphWriter.Render(
+            new BuildProgram([target]),
+            operationLabelProvider: candidate =>
+                ReferenceEquals(candidate, operation)
+                    ? "'value'"
+                    : null);
+
+        Assert.Contains("[0] 'value'", result);
+        Assert.DoesNotContain("[0] TestOperation", result);
+    }
+
+    [Fact]
     public void ExpandedBuildProgramRendersEmptyTargetBody()
     {
         var target = EmptyTarget();
