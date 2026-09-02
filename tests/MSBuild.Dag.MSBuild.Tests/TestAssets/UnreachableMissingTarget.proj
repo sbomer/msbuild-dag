@@ -1,0 +1,6 @@
+<Project>
+  <Target Name="Dormant"
+          DependsOnTargets="Missing" />
+
+  <Target Name="Build" />
+</Project>

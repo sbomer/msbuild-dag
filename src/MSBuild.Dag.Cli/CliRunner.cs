@@ -26,7 +26,10 @@ internal static class CliRunner
         try
         {
             var result = new MSBuildProjectTranslator()
-                .Translate(projectPath, targetName);
+                .Translate(
+                    projectPath,
+                    targetName,
+                    warning => Console.Error.WriteLine($"warning: {warning}"));
 
             var targetNames = new Dictionary<Target, string>(
                 ReferenceEqualityComparer.Instance);

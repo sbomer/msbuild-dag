@@ -294,16 +294,74 @@ public sealed class MSBuildProjectTranslatorTests
         Assert.Contains($"non-literal {attributeName}", exception.Message);
     }
 
+    [Fact]
+    public async Task MissingRequestedDependencyFailsDuringExecution()
+    {
+        var result = TranslateAsset("MissingTarget.proj", "Build");
+        var warning = Assert.Single(result.Warnings);
+        var evaluator = CreateEvaluator();
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await new BuildProgramExecutor(
+                result.Program,
+                new ValueStore(),
+                evaluator.EvaluateAsync)
+                .ExecuteAsync(result.Targets["Build"]));
+
+        Assert.Contains("missing target 'Missing'", warning);
+        Assert.Contains("missing target 'Missing'", exception.Message);
+    }
+
     [Theory]
-    [InlineData("MissingTarget.proj")]
     [InlineData("MissingBeforeTarget.proj")]
     [InlineData("MissingAfterTarget.proj")]
-    public void RejectsMissingNamedTarget(string assetName)
+    public void RejectsMissingTargetRegistrationAnchor(string assetName)
     {
         var exception = Assert.Throws<InvalidOperationException>(
             () => TranslateAsset(assetName, "Build"));
 
         Assert.Contains("missing target 'Missing'", exception.Message);
+    }
+
+    [Fact]
+    public async Task WarnsWithoutFailingForMissingDependencyOnUnreachableTarget()
+    {
+        var result = TranslateAsset(
+            "UnreachableMissingTarget.proj",
+            "Build");
+
+        var warning = Assert.Single(result.Warnings);
+
+        Assert.Contains("Target 'Dormant'", warning);
+        Assert.Contains("missing target 'Missing'", warning);
+        Assert.DoesNotContain("will fail", warning);
+        Assert.Empty(result.Targets["Dormant"].Prelude);
+
+        await new BuildProgramExecutor(
+            result.Program,
+            new ValueStore(),
+            CreateEvaluator().EvaluateAsync)
+            .ExecuteAsync(result.Targets["Build"]);
+    }
+
+    [Fact]
+    public void ReportsWarningBeforeLaterTranslationFailure()
+    {
+        var warnings = new List<string>();
+        var projectPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "TestAssets",
+            "WarningBeforeFailure.proj");
+
+        var exception = Assert.Throws<NotSupportedException>(
+            () => new MSBuildProjectTranslator().Translate(
+                projectPath,
+                "Build",
+                warnings.Add));
+
+        Assert.Single(warnings);
+        Assert.Contains("missing target 'Missing'", warnings[0]);
+        Assert.Contains("non-literal AfterTargets", exception.Message);
     }
 
     [Fact]
@@ -345,6 +403,56 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Fact]
+    public async Task TranslatesAndExecutesMessageTasksInOrder()
+    {
+        var result = TranslateAsset("Message.proj", "Build");
+        var build = result.Targets["Build"];
+        var messages = build.Body.Operations
+            .OfType<MessageOperation>()
+            .ToArray();
+        var first = messages[0];
+        var second = messages[1];
+        var textBinding = Assert.IsAssignableFrom<IStateBindingOperation>(
+            build.Body.GetProducer(first.Text));
+        var importance = Assert.IsType<ConstantOperation<string>>(
+            build.Body.GetProducer(first.Importance));
+        var defaultImportance = Assert.IsType<ConstantOperation<string>>(
+            build.Body.GetProducer(second.Importance));
+        var secondText = Assert.IsType<ConstantOperation<string>>(
+            build.Body.GetProducer(second.Text));
+        var observed = new List<(string Text, string Importance)>();
+        var evaluator = CreateEvaluator(
+            onMessage: (operation, values) =>
+                observed.Add(
+                    (values.Get(operation.Text),
+                     values.Get(operation.Importance))));
+
+        await new BuildProgramExecutor(
+            result.Program,
+            new ValueStore(),
+            evaluator.EvaluateAsync)
+            .ExecuteAsync(build);
+
+        Assert.Equal(2, messages.Length);
+        Assert.Same(first.OrderOutput, secondText.OrderInput);
+        Assert.Same(
+            result.Definition.Evaluation.Initializations.Single(
+                initialization => ReferenceEquals(
+                    initialization.Location,
+                    result.TargetDefinitions["Build"].Reads
+                        .Single().Location)).InitialValue.Value,
+            textBinding.Source);
+        Assert.Equal("High", importance.Content);
+        Assert.Equal("normal", defaultImportance.Content);
+        Assert.Equal(
+            [
+                ("Hello from evaluation", "High"),
+                ("Done", "normal"),
+            ],
+            observed);
+    }
+
+    [Fact]
     public async Task FalseTargetConditionPreventsTargetBodyExecution()
     {
         var projectPath = Path.Combine(
@@ -368,7 +476,8 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     private static OperationEvaluator CreateEvaluator(
-        Action<ToyCompileOperation>? onCompile = null) =>
+        Action<ToyCompileOperation>? onCompile = null,
+        Action<MessageOperation, ValueStore>? onMessage = null) =>
         new OperationEvaluator()
             .Add<ConstantOperation<string>>(
                 static (operation, values, _) =>
@@ -416,7 +525,21 @@ public sealed class MSBuildProjectTranslatorTests
                     onCompile?.Invoke(operation);
                     values.Set(operation.Assembly, "App.dll");
                     return ValueTask.CompletedTask;
-                });
+                })
+            .Add<MessageOperation>(
+                (operation, values, _) =>
+                {
+                    onMessage?.Invoke(operation, values);
+                    return ValueTask.CompletedTask;
+                })
+            .Add<MissingTargetOperation>(
+                static (operation, _, _) =>
+                    ValueTask.FromException(
+                        new InvalidOperationException(
+                            $"Target '{operation.DeclaringTargetName}' " +
+                            $"references missing target " +
+                            $"'{operation.MissingTargetName}' through " +
+                            $"{operation.AttributeName}.")));
 
     private static TranslationResult TranslateAsset(
         string assetName,

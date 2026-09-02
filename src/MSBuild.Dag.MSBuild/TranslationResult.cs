@@ -9,4 +9,5 @@ public sealed record TranslationResult(
     IReadOnlyDictionary<string, Target> Targets,
     IReadOnlyDictionary<string, Value<string>> Properties,
     IReadOnlyDictionary<string, Value<IReadOnlyList<string>>> Items,
-    IReadOnlyDictionary<string, Value<bool>> TargetConditions);
+    IReadOnlyDictionary<string, Value<bool>> TargetConditions,
+    IReadOnlyList<string> Warnings);

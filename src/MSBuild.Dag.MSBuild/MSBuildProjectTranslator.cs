@@ -16,7 +16,10 @@ public sealed class MSBuildProjectTranslator
         @"\$\((?<property>[^()]+)\)",
         RegexOptions.CultureInvariant);
 
-    public TranslationResult Translate(string projectPath, string targetName)
+    public TranslationResult Translate(
+        string projectPath,
+        string targetName,
+        Action<string>? reportWarning = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(projectPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(targetName);
@@ -36,7 +39,8 @@ public sealed class MSBuildProjectTranslator
         var links = GetTargetLinks(
             projectInstance,
             sourceTargets,
-            GetTargetPropertyAssignments(sourceTargets));
+            GetTargetPropertyAssignments(sourceTargets),
+            reportWarning);
         var stateAccesses = new Dictionary<MSBuildTarget, TargetStateAccess>(
             ReferenceEqualityComparer.Instance);
         var propertyLocations =
@@ -111,6 +115,19 @@ public sealed class MSBuildProjectTranslator
                 targetCondition = context.TranslateCondition(target.Condition);
                 targetConditions.Add(target.Name, targetCondition);
                 context.SetTargetGuard(context.CreateGuard(targetCondition));
+            }
+
+            foreach (var missingDependency in links.MissingDependencies
+                .Where(missing => ReferenceEquals(
+                    missing.DeclaringTarget,
+                    target)))
+            {
+                context.AddOperation(
+                    new MissingTargetOperation(
+                        target.Name,
+                        missingDependency.TargetName,
+                        nameof(target.DependsOnTargets),
+                        context.CreateControl()));
             }
 
             foreach (var child in target.Children)
@@ -261,7 +278,8 @@ public sealed class MSBuildProjectTranslator
             targets,
             properties,
             items,
-            targetConditions);
+            targetConditions,
+            links.Warnings);
 
         TargetDefinition CreateDefinition(MSBuildTarget sourceTarget)
         {
@@ -321,7 +339,8 @@ public sealed class MSBuildProjectTranslator
         ProjectInstance project,
         IReadOnlyList<MSBuildTarget> targets,
         IReadOnlyDictionary<string, IReadOnlyList<MSBuildTarget>>
-            propertyAssignments)
+            propertyAssignments,
+        Action<string>? reportWarning)
     {
         var targetsByName = targets.ToDictionary(
             target => target.Name,
@@ -330,20 +349,32 @@ public sealed class MSBuildProjectTranslator
             ReferenceEqualityComparer.Instance);
         var epilogues = new Dictionary<MSBuildTarget, List<MSBuildTarget>>(
             ReferenceEqualityComparer.Instance);
+        var missingDependencies = new List<MissingTargetDependency>();
 
         foreach (var target in targets)
         {
             preludes.Add(
                 target,
-                ResolveTargetList(
+                ResolveDependsOnTargetList(
                     target,
                     ExpandDependsOnTargets(
                         project,
                         target,
                         propertyAssignments),
-                    nameof(target.DependsOnTargets),
-                    targetsByName));
+                    targetsByName,
+                    missingDependencies));
             epilogues.Add(target, []);
+        }
+
+        var warnings = missingDependencies
+            .Select(missing =>
+                $"Target '{missing.DeclaringTarget.Name}' references missing " +
+                $"target '{missing.TargetName}' through DependsOnTargets.")
+            .ToArray();
+
+        foreach (var warning in warnings)
+        {
+            reportWarning?.Invoke(warning);
         }
 
         foreach (var target in targets)
@@ -371,7 +402,9 @@ public sealed class MSBuildProjectTranslator
 
         return new TargetLinks(
             CopyLists(preludes),
-            CopyLists(epilogues));
+            CopyLists(epilogues),
+            warnings,
+            missingDependencies);
     }
 
     private static void EnsureSourceOrchestrationAcyclic(
@@ -478,6 +511,15 @@ public sealed class MSBuildProjectTranslator
                             GetRequiredParameter(task, "Sources"));
                         AddPropertyExpressionRead(
                             GetRequiredParameter(task, "Configuration"));
+                    }
+                    else if (task.Name.Equals(
+                        "Message",
+                        StringComparison.OrdinalIgnoreCase))
+                    {
+                        AddPropertyExpressionRead(
+                            GetRequiredParameter(task, "Text"));
+                        AddPropertyExpressionRead(
+                            GetParameter(task, "Importance") ?? "normal");
                     }
 
                     foreach (var output in task.Outputs
@@ -658,9 +700,10 @@ public sealed class MSBuildProjectTranslator
         {
             if (!targetsByName.TryGetValue(targetName, out var target))
             {
-                throw new InvalidOperationException(
-                    $"Target '{declaringTarget.Name}' references missing target " +
-                    $"'{targetName}' through {attributeName}.");
+                throw MissingTarget(
+                    declaringTarget,
+                    targetName,
+                    attributeName);
             }
 
             AddDistinct(result, target);
@@ -668,6 +711,42 @@ public sealed class MSBuildProjectTranslator
 
         return result;
     }
+
+    private static List<MSBuildTarget> ResolveDependsOnTargetList(
+        MSBuildTarget declaringTarget,
+        string expression,
+        IReadOnlyDictionary<string, MSBuildTarget> targetsByName,
+        List<MissingTargetDependency> missingDependencies)
+    {
+        var result = new List<MSBuildTarget>();
+
+        foreach (var targetName in expression.Split(
+            ';',
+            StringSplitOptions.RemoveEmptyEntries |
+            StringSplitOptions.TrimEntries))
+        {
+            if (!targetsByName.TryGetValue(targetName, out var target))
+            {
+                missingDependencies.Add(
+                    new MissingTargetDependency(
+                        declaringTarget,
+                        targetName));
+                continue;
+            }
+
+            AddDistinct(result, target);
+        }
+
+        return result;
+    }
+
+    private static InvalidOperationException MissingTarget(
+        MSBuildTarget declaringTarget,
+        string targetName,
+        string attributeName) =>
+        new(
+            $"Target '{declaringTarget.Name}' references missing target " +
+            $"'{targetName}' through {attributeName}.");
 
     private static void AddDistinct(
         List<MSBuildTarget> targets,
@@ -769,11 +848,25 @@ public sealed class MSBuildProjectTranslator
             throw Unsupported("task conditions");
         }
 
-        if (!task.Name.Equals("ToyCompile", StringComparison.OrdinalIgnoreCase))
+        if (task.Name.Equals("ToyCompile", StringComparison.OrdinalIgnoreCase))
         {
-            throw Unsupported($"task '{task.Name}'");
+            TranslateToyCompile(task, context);
+            return;
         }
 
+        if (task.Name.Equals("Message", StringComparison.OrdinalIgnoreCase))
+        {
+            TranslateMessage(task, context);
+            return;
+        }
+
+        throw Unsupported($"task '{task.Name}'");
+    }
+
+    private static void TranslateToyCompile(
+        ProjectTaskInstance task,
+        TranslationContext context)
+    {
         var sourcesExpression = GetRequiredParameter(task, "Sources");
         var configurationExpression = GetRequiredParameter(task, "Configuration");
         var sources = context.ResolveItemsExpression(sourcesExpression);
@@ -801,20 +894,52 @@ public sealed class MSBuildProjectTranslator
         }
     }
 
+    private static void TranslateMessage(
+        ProjectTaskInstance task,
+        TranslationContext context)
+    {
+        if (task.Outputs.Count > 0)
+        {
+            throw Unsupported("Message outputs");
+        }
+
+        var text = context.ResolvePropertyExpression(
+            GetRequiredParameter(task, "Text"));
+        var importance = context.ResolvePropertyExpression(
+            GetParameter(task, "Importance") ?? "normal");
+
+        context.AddOperation(
+            new MessageOperation(
+                text,
+                importance,
+                context.CreateControl()));
+    }
+
     private static string GetRequiredParameter(
         ProjectTaskInstance task,
         string parameterName)
     {
-        var parameter = task.Parameters.FirstOrDefault(
-            pair => pair.Key.Equals(parameterName, StringComparison.OrdinalIgnoreCase));
+        var value = GetParameter(task, parameterName);
 
-        if (parameter.Key is null)
+        if (value is null)
         {
             throw new InvalidOperationException(
                 $"{task.Name} requires the {parameterName} parameter.");
         }
 
-        return parameter.Value;
+        return value;
+    }
+
+    private static string? GetParameter(
+        ProjectTaskInstance task,
+        string parameterName)
+    {
+        var parameter = task.Parameters.FirstOrDefault(
+            pair => pair.Key.Equals(
+                parameterName,
+                StringComparison.OrdinalIgnoreCase));
+
+        return parameter.Key is null ? null : parameter.Value;
     }
 
     private static bool TryGetReference(
@@ -845,7 +970,13 @@ public sealed class MSBuildProjectTranslator
 
     private sealed record TargetLinks(
         IReadOnlyDictionary<MSBuildTarget, IReadOnlyList<MSBuildTarget>> Preludes,
-        IReadOnlyDictionary<MSBuildTarget, IReadOnlyList<MSBuildTarget>> Epilogues);
+        IReadOnlyDictionary<MSBuildTarget, IReadOnlyList<MSBuildTarget>> Epilogues,
+        IReadOnlyList<string> Warnings,
+        IReadOnlyList<MissingTargetDependency> MissingDependencies);
+
+    private sealed record MissingTargetDependency(
+        MSBuildTarget DeclaringTarget,
+        string TargetName);
 
     private sealed record TargetStateAccess(
         IReadOnlySet<string> ReadProperties,

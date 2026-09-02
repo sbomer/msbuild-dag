@@ -39,6 +39,20 @@ internal static class TranslatedOperationEvaluator
                         $"bin/{configuration}/App.dll");
                     return ValueTask.CompletedTask;
                 })
+            .Add<MessageOperation>(
+                static (operation, values, _) =>
+                {
+                    Console.WriteLine(values.Get(operation.Text));
+                    return ValueTask.CompletedTask;
+                })
+            .Add<MissingTargetOperation>(
+                static (operation, _, _) =>
+                    ValueTask.FromException(
+                        new InvalidOperationException(
+                            $"Target '{operation.DeclaringTargetName}' " +
+                            $"references missing target " +
+                            $"'{operation.MissingTargetName}' through " +
+                            $"{operation.AttributeName}.")))
             .Add<EqualOperation<string>>(
                 static (operation, values, _) =>
                 {

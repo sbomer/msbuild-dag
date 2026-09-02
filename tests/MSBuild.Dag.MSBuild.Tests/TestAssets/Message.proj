@@ -1,0 +1,11 @@
+<Project>
+  <PropertyGroup>
+    <Greeting>Hello from evaluation</Greeting>
+  </PropertyGroup>
+
+  <Target Name="Build">
+    <Message Text="$(Greeting)"
+             Importance="High" />
+    <Message Text="Done" />
+  </Target>
+</Project>

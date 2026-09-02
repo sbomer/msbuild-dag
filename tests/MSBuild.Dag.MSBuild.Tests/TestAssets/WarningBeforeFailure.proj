@@ -1,0 +1,9 @@
+<Project>
+  <Target Name="Dormant"
+          DependsOnTargets="Missing" />
+
+  <Target Name="Injected"
+          AfterTargets="$(DynamicAnchor)" />
+
+  <Target Name="Build" />
+</Project>
