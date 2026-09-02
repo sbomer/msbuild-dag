@@ -261,10 +261,10 @@ public static class AsciiGraphWriter
         {
             var laneStartY = edge.DepartureY!.Value;
             var laneEndY = edge.ArrivalY!.Value;
-            var laneSourceCornerOccupied = canvas.IsPopulated(sourceX, laneStartY);
-            var departureCornerOccupied = canvas.IsPopulated(laneX, laneStartY);
-            var arrivalCornerOccupied = canvas.IsPopulated(laneX, laneEndY);
-            var laneTargetCornerOccupied = canvas.IsPopulated(targetX, laneEndY);
+            var laneSourceCornerExisting = canvas.Get(sourceX, laneStartY);
+            var departureCornerExisting = canvas.Get(laneX, laneStartY);
+            var arrivalCornerExisting = canvas.Get(laneX, laneEndY);
+            var laneTargetCornerExisting = canvas.Get(targetX, laneEndY);
             canvas.DrawVertical(sourceX, sourceY, laneStartY, verticalStroke);
             canvas.DrawVertical(targetX, laneEndY, targetY, verticalStroke);
             canvas.DrawHorizontal(
@@ -291,22 +291,22 @@ public static class AsciiGraphWriter
                 sourceX,
                 laneStartY,
                 laneX > sourceX ? '└' : '┘',
-                laneSourceCornerOccupied);
+                laneSourceCornerExisting);
             canvas.OverwriteCorner(
                 laneX,
                 laneStartY,
                 laneX > sourceX ? '┐' : '┌',
-                departureCornerOccupied);
+                departureCornerExisting);
             canvas.OverwriteCorner(
                 laneX,
                 laneEndY,
                 targetX > laneX ? '└' : '┘',
-                arrivalCornerOccupied);
+                arrivalCornerExisting);
             canvas.OverwriteCorner(
                 targetX,
                 laneEndY,
                 targetX > laneX ? '┐' : '┌',
-                laneTargetCornerOccupied);
+                laneTargetCornerExisting);
             return;
         }
 
@@ -323,8 +323,8 @@ public static class AsciiGraphWriter
         var middleY = Math.Min(
             lastRouteY,
             firstRouteY + ((edge.RouteLane ?? 0) * 2));
-        var sourceCornerOccupied = canvas.IsPopulated(sourceX, middleY);
-        var targetCornerOccupied = canvas.IsPopulated(targetX, middleY);
+        var sourceCornerExisting = canvas.Get(sourceX, middleY);
+        var targetCornerExisting = canvas.Get(targetX, middleY);
         canvas.DrawVertical(
             sourceX,
             sourceY,
@@ -344,12 +344,12 @@ public static class AsciiGraphWriter
             sourceX,
             middleY,
             targetX > sourceX ? '└' : '┘',
-            sourceCornerOccupied);
+            sourceCornerExisting);
         canvas.OverwriteCorner(
             targetX,
             middleY,
             targetX > sourceX ? '┐' : '┌',
-            targetCornerOccupied);
+            targetCornerExisting);
     }
 
     private static void DrawEdgeEndpoints(Canvas canvas, Edge edge)
@@ -1559,16 +1559,27 @@ public static class AsciiGraphWriter
             _characters[y, x] = character;
         }
 
-        public bool IsPopulated(int x, int y) =>
-            _characters[y, x] is not '\0';
+        public char Get(int x, int y) => _characters[y, x];
 
         public void OverwriteCorner(
             int x,
             int y,
             char character,
-            bool preserveCrossing)
+            char existing)
         {
-            _characters[y, x] = preserveCrossing ? '┼' : character;
+            var existingConnections = GetConnections(existing);
+            var cornerConnections = GetConnections(character);
+
+            _characters[y, x] = existing switch
+            {
+                '\0' => character,
+                _ when existingConnections != 0 && cornerConnections != 0 =>
+                    GetConnectionCharacter(
+                        existingConnections | cornerConnections,
+                        existing,
+                        character),
+                _ => '┼',
+            };
         }
 
         public void Clear(int left, int top, int right, int bottom)

@@ -1,28 +1,7 @@
 <Project>
-    <PropertyGroup>
-        <Key>V0</Key>
-        <Subset>clr+libs-native</Subset>
-        <UseV2>true</UseV2>
-    </PropertyGroup>
-
-    <Target Name="A">
+    <Target Name="Build">
         <PropertyGroup>
-            <Key>V1</Key>
+            <Key Condition="'$(Key)' == ''">DefaultValue</Key>
         </PropertyGroup>
-    </Target>
-
-    <Target Name="B"
-            AfterTargets="A">
-        <ItemGroup>
-            <SpecifiedSubsetName Include="$([MSBuild]::Unescape($(Subset.Replace('+', ';').Replace('-', ';'))))" />
-        </ItemGroup>
-        <Message Text="$(Key)" />
-        <PropertyGroup>
-            <Key Condition="'$(UseV2)' == 'true'">V2</Key>
-        </PropertyGroup>
-    </Target>
-
-    <Target Name="Build"
-            DependsOnTargets="A">
     </Target>
 </Project>
