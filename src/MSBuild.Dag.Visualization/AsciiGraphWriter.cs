@@ -995,14 +995,13 @@ public static class AsciiGraphWriter
         public int Top { get; set; }
 
         public int Width { get; } = kind is NodeKind.Box
-            ? Math.Max(
-                Math.Max(
-                    label.Length + 4,
-                    (Math.Max(inputCount, outputCount) * 7) + 3),
-                (content?.Lines.Select(static line => line.Length).DefaultIfEmpty(0).Max() ?? 0) +
-                    GetContentOffset(label, content) +
-                    GetOrderOutputReservation(content, outputPorts) +
-                    4)
+            ? GetBoxWidth(
+                label,
+                inputCount,
+                outputCount,
+                content,
+                inputPorts,
+                outputPorts)
             : label.Length + 3;
 
         public int Height =>
@@ -1099,6 +1098,103 @@ public static class AsciiGraphWriter
 
             var count = outputPorts?.Count(static port => port is null) ?? 0;
             return count * 7;
+        }
+
+        private static int GetBoxWidth(
+            string label,
+            int inputCount,
+            int outputCount,
+            GraphNodeContent? content,
+            IReadOnlyList<int?>? inputPorts,
+            IReadOnlyList<int?>? outputPorts)
+        {
+            var contentOffset = GetContentOffset(label, content);
+            var width = Math.Max(
+                Math.Max(
+                    label.Length + 4,
+                    (Math.Max(inputCount, outputCount) * 7) + 3),
+                (content?.Lines.Select(static line => line.Length).DefaultIfEmpty(0).Max() ?? 0) +
+                    contentOffset +
+                    GetOrderOutputReservation(content, outputPorts) +
+                    4);
+
+            while (content is not null &&
+                !PortLabelsFit(
+                    width,
+                    inputCount,
+                    outputCount,
+                    content,
+                    contentOffset,
+                    inputPorts,
+                    outputPorts))
+            {
+                width++;
+            }
+
+            return width;
+        }
+
+        private static bool PortLabelsFit(
+            int width,
+            int inputCount,
+            int outputCount,
+            GraphNodeContent content,
+            int contentOffset,
+            IReadOnlyList<int?>? inputPorts,
+            IReadOnlyList<int?>? outputPorts) =>
+            LabelsFit(
+                Enumerable.Range(0, inputPorts?.Count ?? 0)
+                    .Select(slot =>
+                    {
+                        var port = inputPorts![slot];
+                        var x = port is int inputPort
+                            ? 2 + contentOffset + content.InputOffsets[inputPort]
+                            : ((slot + 1) * width) / (Math.Max(1, inputCount) + 1);
+                        return (Start: x, End: x + (port is int index ? $"i{index}".Length : 0));
+                    }),
+                width) &&
+            LabelsFit(
+                Enumerable.Range(0, outputPorts?.Count ?? 0)
+                    .Select(slot =>
+                    {
+                        var port = outputPorts![slot];
+                        var x = port is int outputPort
+                            ? 2 + contentOffset + content.OutputOffsets[outputPort]
+                            : GetOrderOutputPortX(width, slot, outputPorts);
+                        var labelLength = port is int index ? $"o{index}".Length : "order".Length;
+                        return (Start: x, End: x + labelLength);
+                    }),
+                width);
+
+        private static bool LabelsFit(
+            IEnumerable<(int Start, int End)> labels,
+            int width)
+        {
+            var ordered = labels.OrderBy(label => label.Start).ToArray();
+
+            return ordered.All(label => label.Start > 0 && label.End < width - 1) &&
+                ordered.Zip(ordered.Skip(1))
+                    .All(pair => pair.First.End + 1 < pair.Second.Start);
+        }
+
+        private static int GetOrderOutputPortX(
+            int width,
+            int slot,
+            IReadOnlyList<int?> ports)
+        {
+            var orderIndex = 0;
+
+            for (var index = 0; index < slot; index++)
+            {
+                if (ports[index] is null)
+                {
+                    orderIndex++;
+                }
+            }
+
+            return width -
+                3 -
+                ((ports.Count(static port => port is null) - orderIndex) * 7);
         }
 
         private static int GetContentOffset(

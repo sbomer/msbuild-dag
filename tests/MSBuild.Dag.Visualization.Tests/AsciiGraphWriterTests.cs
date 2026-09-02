@@ -147,6 +147,38 @@ public sealed class AsciiGraphWriterTests
         Assert.Contains("(empty)", result);
     }
 
+    [Fact]
+    public void ExpandedBuildGraphKeepsBoundaryLabelsClearOfOrderEdges()
+    {
+        var firstValue = new Value<string>();
+        var secondValue = new Value<string>();
+        var first = new Target(
+            [],
+            [firstValue],
+            [new TestOperation([], [firstValue])]);
+        var second = new Target(
+            [],
+            [secondValue],
+            [new TestOperation([], [secondValue])]);
+        var consumer = new Target(
+            [firstValue, secondValue],
+            [],
+            [new TestOperation([firstValue, secondValue], [])]);
+        var graph = new BuildGraph(
+            [first, second, consumer],
+            [
+                new TargetDependency(first, consumer),
+                new TargetDependency(second, consumer),
+            ]);
+
+        var result = AsciiGraphWriter.Render(graph);
+
+        Assert.Equal(2, CountOccurrences(result, "i0"));
+        Assert.Equal(2, CountOccurrences(result, "i1"));
+        Assert.DoesNotContain("i0▼", result);
+        Assert.DoesNotContain("i1▼", result);
+    }
+
     private static int CountOccurrences(string value, string search)
     {
         var count = 0;
