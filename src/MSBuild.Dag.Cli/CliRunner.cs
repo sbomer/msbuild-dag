@@ -43,8 +43,9 @@ internal static class CliRunner
 
             var values = new ValueStore();
 
-            await new OperationGraphExecutor().ExecuteAsync(
-                result.Targets[targetName].Body,
+            await ExecuteTargetAsync(
+                result.Graph,
+                result.Targets[targetName],
                 values,
                 TranslatedOperationEvaluator.EvaluateAsync);
 
@@ -82,6 +83,42 @@ internal static class CliRunner
     {
         Console.Error.WriteLine($"error: {message}");
         return 1;
+    }
+
+    private static async ValueTask ExecuteTargetAsync(
+        BuildGraph graph,
+        Target requestedTarget,
+        ValueStore values,
+        Func<Operation, ValueStore, CancellationToken, ValueTask>
+            executeOperation,
+        CancellationToken cancellationToken = default)
+    {
+        var completed = new HashSet<Target>(
+            ReferenceEqualityComparer.Instance);
+        var executor = new OperationGraphExecutor();
+
+        await ExecuteAsync(requestedTarget);
+
+        async ValueTask ExecuteAsync(Target target)
+        {
+            if (completed.Contains(target))
+            {
+                return;
+            }
+
+            foreach (var dependency in graph.GetDependencies(target))
+            {
+                await ExecuteAsync(dependency);
+            }
+
+            await executor.ExecuteAsync(
+                target.Body,
+                values,
+                executeOperation,
+                cancellationToken);
+
+            completed.Add(target);
+        }
     }
 
     private static void WriteResults(

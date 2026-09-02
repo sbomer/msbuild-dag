@@ -1,0 +1,17 @@
+<Project>
+    <Target Name="A">
+        <PropertyGroup>
+            <Property>SetByA</Property>
+        </PropertyGroup>
+    </Target>
+    <Target Name="B">
+        <PropertyGroup>
+            <Property>SetByB</Property>
+        </PropertyGroup>
+    </Target>
+    <Target Name="Build"
+            DependsOnTargets="A;B">
+        <ToyCompile Configuration="$(Property)"
+            Sources="Item" />
+    </Target>
+</Project>

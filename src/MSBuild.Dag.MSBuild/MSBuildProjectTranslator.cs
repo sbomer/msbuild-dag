@@ -3,6 +3,7 @@ using Microsoft.Build.Execution;
 using MSBuild.Dag.Core;
 using System.Text.RegularExpressions;
 using DagOperation = MSBuild.Dag.Core.Operation;
+using MSBuildTarget = Microsoft.Build.Execution.ProjectTargetInstance;
 
 namespace MSBuild.Dag.MSBuild;
 
@@ -21,64 +22,75 @@ public sealed class MSBuildProjectTranslator
         var project = projectCollection.LoadProject(Path.GetFullPath(projectPath));
         var projectInstance = project.CreateProjectInstance();
 
-        if (!projectInstance.Targets.TryGetValue(targetName, out var target))
+        if (!projectInstance.Targets.ContainsKey(targetName))
         {
             throw new ArgumentException(
                 $"Target '{targetName}' does not exist.",
                 nameof(targetName));
         }
 
+        var sourceTargets = projectInstance.Targets.Values.ToArray();
+        var dependencies = GetTargetDependencies(sourceTargets);
+        var translationOrder = GetTranslationOrder(sourceTargets, dependencies);
         var context = new TranslationContext(projectInstance);
+        var targets = new Dictionary<string, Target>(
+            StringComparer.OrdinalIgnoreCase);
 
-        Value<GuardToken>? targetGuard = null;
-
-        if (!string.IsNullOrWhiteSpace(target.Condition))
+        foreach (var target in translationOrder)
         {
-            var condition = context.TranslateCondition(target.Condition);
-            context.TargetConditions[targetName] = condition;
-            targetGuard = context.CreateGuard(condition);
-        }
+            context.BeginTarget();
 
-        if (!string.IsNullOrWhiteSpace(target.DependsOnTargets))
-        {
-            throw Unsupported("DependsOnTargets");
-        }
-
-        context.BeginTarget(targetGuard);
-
-        foreach (var child in target.Children)
-        {
-            switch (child)
+            if (!string.IsNullOrWhiteSpace(target.Condition))
             {
-                case ProjectPropertyGroupTaskInstance propertyGroup:
-                    TranslatePropertyGroup(propertyGroup, context);
-                    break;
-
-                case ProjectItemGroupTaskInstance itemGroup:
-                    TranslateItemGroup(itemGroup, context);
-                    break;
-
-                case ProjectTaskInstance task:
-                    TranslateTask(task, context);
-                    break;
-
-                default:
-                    throw Unsupported(child.GetType().Name);
+                var condition = context.TranslateCondition(target.Condition);
+                context.TargetConditions[target.Name] = condition;
+                context.SetTargetGuard(context.CreateGuard(condition));
             }
+
+            foreach (var child in target.Children)
+            {
+                switch (child)
+                {
+                    case ProjectPropertyGroupTaskInstance propertyGroup:
+                        TranslatePropertyGroup(propertyGroup, context);
+                        break;
+
+                    case ProjectItemGroupTaskInstance itemGroup:
+                        TranslateItemGroup(itemGroup, context);
+                        break;
+
+                    case ProjectTaskInstance task:
+                        TranslateTask(task, context);
+                        break;
+
+                    default:
+                        throw Unsupported(child.GetType().Name);
+                }
+            }
+
+            var operations = context.Operations.ToArray();
+            var operationGraph = new OperationGraph(operations);
+            targets.Add(
+                target.Name,
+                new Target(
+                    GetExternalInputs(operationGraph),
+                    GetTargetOutputs(operationGraph, context),
+                    operations));
         }
 
-        var operationGraph = new OperationGraph(context.Operations);
-        var translatedTarget = new Target(
-            GetExternalInputs(operationGraph),
-            GetTargetOutputs(operationGraph, context),
-            context.Operations);
+        var explicitDependencies = dependencies
+            .SelectMany(
+                pair => pair.Value.Select(
+                    prerequisite => new TargetDependency(
+                        targets[prerequisite.Name],
+                        targets[pair.Key.Name])))
+            .ToArray();
 
         return new TranslationResult(
-            new BuildGraph([translatedTarget]),
-            new Dictionary<string, Target>(StringComparer.OrdinalIgnoreCase)
-            {
-                [targetName] = translatedTarget,
-            },
+            new BuildGraph(
+                sourceTargets.Select(target => targets[target.Name]).ToArray(),
+                explicitDependencies),
+            targets,
             new Dictionary<string, Value<string>>(
                 context.Properties,
                 StringComparer.OrdinalIgnoreCase),
@@ -88,6 +100,108 @@ public sealed class MSBuildProjectTranslator
             new Dictionary<string, Value<bool>>(
                 context.TargetConditions,
                 StringComparer.OrdinalIgnoreCase));
+    }
+
+    private static IReadOnlyDictionary<MSBuildTarget, IReadOnlyList<MSBuildTarget>>
+        GetTargetDependencies(IReadOnlyList<MSBuildTarget> targets)
+    {
+        var targetsByName = targets.ToDictionary(
+            target => target.Name,
+            StringComparer.OrdinalIgnoreCase);
+
+        var result = new Dictionary<MSBuildTarget, IReadOnlyList<MSBuildTarget>>(
+            ReferenceEqualityComparer.Instance);
+
+        foreach (var target in targets)
+        {
+            if (!string.IsNullOrWhiteSpace(target.BeforeTargets))
+            {
+                throw Unsupported("BeforeTargets");
+            }
+
+            if (!string.IsNullOrWhiteSpace(target.AfterTargets))
+            {
+                throw Unsupported("AfterTargets");
+            }
+
+            var dependencyExpression = target.DependsOnTargets;
+
+            if (ContainsReference(dependencyExpression))
+            {
+                throw Unsupported(
+                    $"non-literal DependsOnTargets on target '{target.Name}'");
+            }
+
+            var targetDependencies = new List<MSBuildTarget>();
+            var seenDependencies = new HashSet<MSBuildTarget>(
+                ReferenceEqualityComparer.Instance);
+
+            foreach (var dependencyName in dependencyExpression.Split(
+                ';',
+                StringSplitOptions.RemoveEmptyEntries |
+                StringSplitOptions.TrimEntries))
+            {
+                if (!targetsByName.TryGetValue(
+                    dependencyName,
+                    out var dependency))
+                {
+                    throw new InvalidOperationException(
+                        $"Target '{target.Name}' depends on missing target " +
+                        $"'{dependencyName}'.");
+                }
+
+                if (seenDependencies.Add(dependency))
+                {
+                    targetDependencies.Add(dependency);
+                }
+            }
+
+            result.Add(target, targetDependencies);
+        }
+
+        return result;
+    }
+
+    private static IReadOnlyList<MSBuildTarget> GetTranslationOrder(
+        IReadOnlyList<MSBuildTarget> targets,
+        IReadOnlyDictionary<MSBuildTarget, IReadOnlyList<MSBuildTarget>>
+            dependencies)
+    {
+        var result = new List<MSBuildTarget>(targets.Count);
+        var visiting = new HashSet<MSBuildTarget>(
+            ReferenceEqualityComparer.Instance);
+        var visited = new HashSet<MSBuildTarget>(
+            ReferenceEqualityComparer.Instance);
+
+        foreach (var target in targets)
+        {
+            Visit(target);
+        }
+
+        return result;
+
+        void Visit(MSBuildTarget target)
+        {
+            if (visited.Contains(target))
+            {
+                return;
+            }
+
+            if (!visiting.Add(target))
+            {
+                throw new InvalidOperationException(
+                    "The target dependency graph must be acyclic.");
+            }
+
+            foreach (var dependency in dependencies[target])
+            {
+                Visit(dependency);
+            }
+
+            visiting.Remove(target);
+            visited.Add(target);
+            result.Add(target);
+        }
     }
 
     private static IReadOnlyList<Value> GetExternalInputs(OperationGraph graph)
@@ -263,12 +377,16 @@ public sealed class MSBuildProjectTranslator
 
         public List<DagOperation> Operations { get; } = [];
 
-        public void BeginTarget(Value<GuardToken>? guard)
+        public void BeginTarget()
         {
-            TargetGuard = guard;
+            Operations.Clear();
+            TargetGuard = null;
             CurrentOrderToken = null;
             IsTranslatingTarget = true;
         }
+
+        public void SetTargetGuard(Value<GuardToken> guard) =>
+            TargetGuard = guard;
 
         public OperationControl CreateControl() =>
             new(
@@ -303,7 +421,9 @@ public sealed class MSBuildProjectTranslator
             }
 
             var left = GetProperty(match.Groups["property"].Value);
-            var right = AddConstant(match.Groups["literal"].Value);
+            var right = AddConstant(
+                match.Groups["literal"].Value,
+                ordered: false);
 
             DagOperation comparison = match.Groups["operator"].Value switch
             {
@@ -416,8 +536,10 @@ public sealed class MSBuildProjectTranslator
             return false;
         }
 
-        private static bool ContainsReference(string expression) =>
-            expression.Contains("$(", StringComparison.Ordinal) ||
-            expression.Contains("@(", StringComparison.Ordinal);
     }
+
+    private static bool ContainsReference(string expression) =>
+        expression.Contains("$(", StringComparison.Ordinal) ||
+        expression.Contains("@(", StringComparison.Ordinal) ||
+        expression.Contains("%(", StringComparison.Ordinal);
 }

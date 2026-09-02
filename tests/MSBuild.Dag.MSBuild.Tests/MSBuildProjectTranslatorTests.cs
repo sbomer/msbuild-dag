@@ -14,60 +14,76 @@ public sealed class MSBuildProjectTranslatorTests
             "ToyBuild.proj");
 
         var result = new MSBuildProjectTranslator().Translate(projectPath, "Build");
-        var graph = result.Targets["Build"].Body;
+        var prepare = result.Targets["Prepare"];
+        var collectSources = result.Targets["CollectSources"];
+        var build = result.Targets["Build"];
+        var graph = build.Body;
 
-        Assert.Same(result.Targets["Build"], Assert.Single(result.Graph.Targets));
+        Assert.Equal(3, result.Graph.Targets.Count);
+        Assert.Equal(2, result.Graph.GetDependencies(build).Count);
+        Assert.Contains(prepare, result.Graph.GetDependencies(build));
+        Assert.Contains(collectSources, result.Graph.GetDependencies(build));
+        Assert.Empty(result.Graph.GetDependencies(prepare));
+        Assert.Empty(result.Graph.GetDependencies(collectSources));
 
         var compile = Assert.Single(graph.Operations.OfType<ToyCompileOperation>());
-        var concat = Assert.Single(graph.Operations.OfType<ConcatItemsOperation>());
-        var condition = Assert.Single(
-            graph.Operations.OfType<EqualOperation<string>>());
-        var guard = Assert.Single(
-            graph.Operations.OfType<ConditionGuardOperation>());
+        var configuration = Assert.Single(
+            prepare.Body.Operations.OfType<ConstantOperation<string>>(),
+            operation => operation.Content == "Debug");
+        var concat = Assert.Single(
+            collectSources.Body.Operations.OfType<ConcatItemsOperation>());
 
         Assert.Same(concat.Result, compile.Sources);
         Assert.Same(compile.Assembly, result.Properties["AssemblyPath"]);
         Assert.Same(concat.Result, result.Items["Compile"]);
-        Assert.Same(condition.Result, result.TargetConditions["Build"]);
-        Assert.Same(condition.Result, guard.Condition);
+        Assert.Same(configuration.Result, result.Properties["Configuration"]);
+        Assert.Same(configuration.Result, compile.Configuration);
+        Assert.Contains(configuration.Result, prepare.Outputs);
+        Assert.Contains(configuration.Result, build.Inputs);
+        Assert.Contains(concat.Result, collectSources.Outputs);
+        Assert.Contains(concat.Result, build.Inputs);
 
-        Assert.Contains(
-            graph.GetDependencies(compile),
-            operation => ReferenceEquals(operation, concat));
-
-        var configuration = Assert.Single(
-            graph.Operations
-                .OfType<ConstantOperation<string>>(),
-            operation => operation.Content == "Debug");
-        Assert.Contains(
-            graph.GetDependencies(configuration),
-            operation => operation is ConditionGuardOperation);
-        Assert.Same(guard.Result, configuration.Guard);
+        Assert.Empty(graph.GetDependencies(compile));
+        Assert.Null(configuration.Guard);
         Assert.Null(configuration.OrderInput);
         Assert.Same(configuration.OrderOutput, configuration.Outputs[0]);
         Assert.Same(configuration.Result, configuration.Outputs[1]);
 
         var appendedItems = Assert.Single(
-            graph.Operations
+            collectSources.Body.Operations
                 .OfType<ConstantOperation<IReadOnlyList<string>>>(),
-            operation => operation.Content.SequenceEqual(["Program.cs"]));
+            operation => operation.Content.SequenceEqual(["Generated.cs"]));
 
         Assert.Null(appendedItems.Guard);
-        Assert.Same(configuration.OrderOutput, appendedItems.OrderInput);
-        Assert.Same(
-            appendedItems.OrderInput,
-            appendedItems.Inputs[0]);
+        Assert.Null(appendedItems.OrderInput);
         Assert.Same(appendedItems.OrderOutput, appendedItems.Outputs[0]);
         Assert.Same(appendedItems.Result, appendedItems.Outputs[1]);
 
-        Assert.NotNull(compile.OrderInput);
-        Assert.Same(compile.OrderInput, compile.Inputs[0]);
+        Assert.Null(compile.OrderInput);
         Assert.Same(compile.OrderOutput, compile.Outputs[0]);
         Assert.Same(compile.Assembly, compile.Outputs[1]);
     }
 
     [Fact]
-    public void LoadsSdkStyleProjectBeforeReportingUnsupportedTargetDependencies()
+    public void RequestedTargetDoesNotRestrictStaticGraphLowering()
+    {
+        var projectPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "TestAssets",
+            "ToyBuild.proj");
+
+        var result = new MSBuildProjectTranslator().Translate(
+            projectPath,
+            "Prepare");
+
+        Assert.Equal(3, result.Graph.Targets.Count);
+        Assert.Equal(
+            ["Prepare", "CollectSources", "Build"],
+            result.Targets.Keys);
+    }
+
+    [Fact]
+    public void LoadsSdkStyleProjectBeforeReportingUnsupportedConstruct()
     {
         var projectPath = Path.Combine(
             AppContext.BaseDirectory,
@@ -77,7 +93,21 @@ public sealed class MSBuildProjectTranslatorTests
         var exception = Assert.Throws<NotSupportedException>(
             () => new MSBuildProjectTranslator().Translate(projectPath, "Build"));
 
-        Assert.Contains("DependsOnTargets", exception.Message);
+        Assert.Contains("restricted MSBuild translator", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsNonLiteralTargetDependencies()
+    {
+        var projectPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "TestAssets",
+            "DynamicDepends.proj");
+
+        var exception = Assert.Throws<NotSupportedException>(
+            () => new MSBuildProjectTranslator().Translate(projectPath, "Build"));
+
+        Assert.Contains("non-literal DependsOnTargets", exception.Message);
     }
 
     [Fact]
@@ -118,29 +148,6 @@ public sealed class MSBuildProjectTranslatorTests
 
         Assert.False(values.Get(result.TargetConditions["Build"]));
         Assert.False(compileExecuted);
-    }
-
-    [Fact(
-        Skip = "Multi-target lowering and post-condition state merges are not yet implemented.")]
-    public async Task SkippedTargetPreservesPriorPropertyForFollowingTarget()
-    {
-        var projectPath = Path.Combine(
-            AppContext.BaseDirectory,
-            "TestAssets",
-            "ToyBuild.proj");
-        var result = new MSBuildProjectTranslator()
-            .Translate(projectPath, "AfterSkippedBuild");
-        var values = new ValueStore();
-        var evaluator = CreateEvaluator();
-
-        await new OperationGraphExecutor().ExecuteAsync(
-            result.Targets["AfterSkippedBuild"].Body,
-            values,
-            evaluator.EvaluateAsync);
-
-        Assert.Equal(
-            "Release",
-            values.Get(result.Properties["ObservedConfiguration"]));
     }
 
     private static OperationEvaluator CreateEvaluator(

@@ -5,12 +5,12 @@ namespace MSBuild.Dag.Visualization;
 internal sealed class BuildGraphRenderingAdapter
 {
     private readonly IReadOnlyDictionary<Operation, string> _labels;
-    private readonly IReadOnlyDictionary<Operation, IReadOnlyList<string>> _contents;
+    private readonly IReadOnlyDictionary<Operation, GraphNodeContent> _contents;
 
     private BuildGraphRenderingAdapter(
         OperationGraph graph,
         IReadOnlyDictionary<Operation, string> labels,
-        IReadOnlyDictionary<Operation, IReadOnlyList<string>> contents)
+        IReadOnlyDictionary<Operation, GraphNodeContent> contents)
     {
         Graph = graph;
         _labels = labels;
@@ -21,7 +21,7 @@ internal sealed class BuildGraphRenderingAdapter
 
     public string GetLabel(Operation operation) => _labels[operation];
 
-    public IReadOnlyList<string>? GetContent(Operation operation) =>
+    public GraphNodeContent? GetContent(Operation operation) =>
         _contents.GetValueOrDefault(operation);
 
     public static BuildGraphRenderingAdapter Create(
@@ -29,34 +29,81 @@ internal sealed class BuildGraphRenderingAdapter
         IReadOnlyDictionary<Target, string>? targetNames,
         bool includeTargetBodies = false)
     {
-        var inputs = new Dictionary<Target, List<Value>>(
+        var inputs = new Dictionary<Target, List<(Value Value, int? Port)>>(
             ReferenceEqualityComparer.Instance);
-        var outputs = new Dictionary<Target, List<Value>>(
+        var outputs = new Dictionary<Target, List<(Value Value, int? Port)>>(
             ReferenceEqualityComparer.Instance);
 
         foreach (var target in graph.Targets)
         {
-            inputs.Add(target, new List<Value>(target.Inputs));
-            outputs.Add(target, new List<Value>(target.Outputs));
+            inputs.Add(target, []);
+            outputs.Add(
+                target,
+                target.Outputs
+                    .Select((value, index) => (value, (int?)index))
+                    .ToList());
         }
+
+        var orderValues = new Dictionary<TargetDependency, Value<OrderToken>>();
 
         foreach (var dependency in graph.ExplicitDependencies)
         {
             var order = new Value<OrderToken>();
-            outputs[dependency.Prerequisite].Add(order);
-            inputs[dependency.Dependent].Add(order);
+            orderValues.Add(dependency, order);
+            outputs[dependency.Prerequisite].Add((order, null));
+        }
+
+        foreach (var target in graph.Targets)
+        {
+            for (var index = 0; index < target.Inputs.Count; index++)
+            {
+                if (graph.GetProducer(target.Inputs[index]) is null)
+                {
+                    inputs[target].Add((target.Inputs[index], index));
+                }
+            }
+
+            foreach (var prerequisite in graph.Targets)
+            {
+                for (var index = 0; index < target.Inputs.Count; index++)
+                {
+                    if (ReferenceEquals(
+                        graph.GetProducer(target.Inputs[index]),
+                        prerequisite))
+                    {
+                        inputs[target].Add((target.Inputs[index], index));
+                    }
+                }
+
+                foreach (var dependency in graph.ExplicitDependencies)
+                {
+                    if (ReferenceEquals(dependency.Prerequisite, prerequisite) &&
+                        ReferenceEquals(dependency.Dependent, target))
+                    {
+                        inputs[target].Add((orderValues[dependency], null));
+                    }
+                }
+            }
         }
 
         var operations = new List<Operation>(graph.Targets.Count);
         var labels = new Dictionary<Operation, string>(
             ReferenceEqualityComparer.Instance);
-        var contents = new Dictionary<Operation, IReadOnlyList<string>>(
+        var contents = new Dictionary<Operation, GraphNodeContent>(
             ReferenceEqualityComparer.Instance);
 
         for (var index = 0; index < graph.Targets.Count; index++)
         {
             var target = graph.Targets[index];
-            var operation = new TargetNodeOperation(inputs[target], outputs[target]);
+            var operation = new TargetNodeOperation(
+                inputs[target].Select(static entry => entry.Value).ToArray(),
+                outputs[target].Select(static entry => entry.Value).ToArray(),
+                inputs[target].Select(static entry => entry.Port).ToArray(),
+                outputs[target].Select(static entry => entry.Port).ToArray())
+            {
+                BodyInputCount = target.Inputs.Count,
+                BodyOutputCount = target.Outputs.Count,
+            };
             operations.Add(operation);
 
             labels.Add(
@@ -67,7 +114,7 @@ internal sealed class BuildGraphRenderingAdapter
 
             if (includeTargetBodies)
             {
-                contents.Add(operation, RenderBody(target.Body));
+                contents.Add(operation, RenderBody(target));
             }
         }
 
@@ -77,21 +124,36 @@ internal sealed class BuildGraphRenderingAdapter
             contents);
     }
 
-    private static IReadOnlyList<string> RenderBody(OperationGraph body)
-    {
-        return AsciiGraphWriter.Render(body)
-            .Split(Environment.NewLine)
-            .Skip(1)
-            .Where(static line => line.Length > 0)
-            .ToArray();
-    }
+    private static GraphNodeContent RenderBody(Target target) =>
+        AsciiGraphWriter.RenderTargetBody(target);
 
     private sealed class TargetNodeOperation(
         IReadOnlyList<Value> inputs,
-        IReadOnlyList<Value> outputs) : Operation
+        IReadOnlyList<Value> outputs,
+        IReadOnlyList<int?> inputPorts,
+        IReadOnlyList<int?> outputPorts) : Operation, ITargetRenderingOperation
     {
+        public int BodyInputCount { get; init; }
+
+        public int BodyOutputCount { get; init; }
+
+        public IReadOnlyList<int?> InputPorts { get; } = inputPorts;
+
+        public IReadOnlyList<int?> OutputPorts { get; } = outputPorts;
+
         public override IReadOnlyList<Value> Inputs { get; } = inputs;
 
         public override IReadOnlyList<Value> Outputs { get; } = outputs;
     }
+}
+
+internal interface ITargetRenderingOperation
+{
+    int BodyInputCount { get; }
+
+    int BodyOutputCount { get; }
+
+    IReadOnlyList<int?> InputPorts { get; }
+
+    IReadOnlyList<int?> OutputPorts { get; }
 }

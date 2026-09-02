@@ -1,0 +1,10 @@
+<Project>
+  <PropertyGroup>
+    <BuildDependsOn>Prepare</BuildDependsOn>
+  </PropertyGroup>
+
+  <Target Name="Prepare" />
+
+  <Target Name="Build"
+          DependsOnTargets="$(BuildDependsOn)" />
+</Project>

@@ -129,6 +129,22 @@ public sealed class AsciiGraphWriterTests
         Assert.Contains("[1] Compile", result);
         Assert.Equal(2, CountOccurrences(result, "TestOperation"));
         Assert.DoesNotContain("Target bodies", result);
+        Assert.DoesNotContain("external[", result);
+        Assert.DoesNotContain("output[", result);
+        Assert.Equal(2, CountOccurrences(result, "i0"));
+        Assert.Equal(2, CountOccurrences(result, "o0"));
+    }
+
+    [Fact]
+    public void ExpandedBuildGraphRendersEmptyTargetBody()
+    {
+        var target = new Target([], [], []);
+        var graph = new BuildGraph([target]);
+
+        var result = AsciiGraphWriter.Render(graph);
+
+        Assert.Contains("[0] Target 0", result);
+        Assert.Contains("(empty)", result);
     }
 
     private static int CountOccurrences(string value, string search)

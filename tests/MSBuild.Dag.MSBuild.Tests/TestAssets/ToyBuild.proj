@@ -1,38 +1,30 @@
 <Project>
   <PropertyGroup>
-    <RunBuild>true</RunBuild>
-    <RunSkippedBuild>false</RunSkippedBuild>
     <Configuration>Release</Configuration>
   </PropertyGroup>
 
-  <Target Name="Build"
-          Condition="'$(RunBuild)' == 'true'">
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+  </ItemGroup>
+
+  <Target Name="Prepare">
     <PropertyGroup>
       <Configuration>Debug</Configuration>
     </PropertyGroup>
+  </Target>
 
+  <Target Name="CollectSources">
     <ItemGroup>
-      <Compile Include="Program.cs" />
+      <Compile Include="Generated.cs" />
     </ItemGroup>
+  </Target>
 
+  <Target Name="Build"
+          DependsOnTargets="Prepare;CollectSources">
     <ToyCompile Sources="@(Compile)"
                 Configuration="$(Configuration)">
       <Output TaskParameter="Assembly"
               PropertyName="AssemblyPath" />
     </ToyCompile>
-  </Target>
-
-  <Target Name="SkippedBuild"
-          Condition="'$(RunSkippedBuild)' == 'true'">
-    <PropertyGroup>
-      <Configuration>ShouldNotBeObserved</Configuration>
-    </PropertyGroup>
-  </Target>
-
-  <Target Name="AfterSkippedBuild"
-          DependsOnTargets="SkippedBuild">
-    <PropertyGroup>
-      <ObservedConfiguration>$(Configuration)</ObservedConfiguration>
-    </PropertyGroup>
   </Target>
 </Project>
