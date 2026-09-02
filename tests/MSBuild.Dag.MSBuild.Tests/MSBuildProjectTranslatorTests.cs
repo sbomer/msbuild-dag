@@ -20,7 +20,9 @@ public sealed class MSBuildProjectTranslatorTests
         var afterBuild = result.Targets["AfterBuild"];
         var graph = build.Body;
 
+        Assert.Equal(4, result.Definition.Targets.Count);
         Assert.Equal(4, result.Program.Targets.Count);
+        Assert.Equal(4, result.TargetDefinitions.Count);
         Assert.Equal([prepare, collectSources], build.Prelude);
         Assert.Equal([afterBuild], build.Epilogue);
         Assert.Empty(afterBuild.Prelude);
@@ -42,8 +44,13 @@ public sealed class MSBuildProjectTranslatorTests
             operation => operation.Content == "Debug");
         var concat = Assert.Single(
             collectSources.Body.Operations.OfType<ConcatItemsOperation>());
+        var sourcesBinding = Assert.IsAssignableFrom<IStateBindingOperation>(
+            graph.GetProducer(compile.Sources));
+        var configurationBinding =
+            Assert.IsAssignableFrom<IStateBindingOperation>(
+                graph.GetProducer(compile.Configuration));
 
-        Assert.Same(concat.Result, compile.Sources);
+        Assert.Same(concat.Result, sourcesBinding.Source);
         Assert.Same(compile.Assembly, result.Properties["AssemblyPath"]);
         Assert.Same(concat.Result, result.Items["Compile"]);
         Assert.Same(configuration.Result, result.Properties["Configuration"]);
@@ -53,13 +60,13 @@ public sealed class MSBuildProjectTranslatorTests
                 ReferenceEquals(
                     operation.Result,
                     result.Properties["AfterBuildRan"]));
-        Assert.Same(configuration.Result, compile.Configuration);
+        Assert.Same(configuration.Result, configurationBinding.Source);
         Assert.Contains(configuration.Result, prepare.Outputs);
         Assert.Contains(configuration.Result, build.Inputs);
         Assert.Contains(concat.Result, collectSources.Outputs);
         Assert.Contains(concat.Result, build.Inputs);
 
-        Assert.Empty(graph.GetDependencies(compile));
+        Assert.Equal(2, graph.GetDependencies(compile).Count);
         Assert.Null(configuration.Guard);
         Assert.Null(configuration.OrderInput);
         Assert.Same(configuration.OrderOutput, configuration.Outputs[0]);
@@ -135,17 +142,143 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Fact]
-    public void RejectsNonLiteralTargetDependencies()
+    public void ExpandsTargetDependenciesFromEvaluatedProperties()
     {
-        var projectPath = Path.Combine(
-            AppContext.BaseDirectory,
-            "TestAssets",
-            "DynamicDepends.proj");
+        var result = TranslateAsset("DynamicDepends.proj", "Build");
+        var build = result.Targets["Build"];
 
+        Assert.Equal(
+            [
+                result.Targets["Prepare"],
+                result.Targets["CollectSources"],
+            ],
+            build.Prelude);
+    }
+
+    [Fact]
+    public void LinksPropertyStateIndependentlyOfTargetDeclarationOrder()
+    {
+        var result = TranslateAsset("OutOfOrderState.proj", "Build");
+        var prepare = result.Targets["Prepare"];
+        var build = result.Targets["Build"];
+        var configuration = Assert.Single(
+            prepare.Body.Operations.OfType<ConstantOperation<string>>(),
+            operation => operation.Content == "Debug");
+        var compile = Assert.Single(
+            build.Body.Operations.OfType<ToyCompileOperation>());
+        var binding = Assert.IsAssignableFrom<IStateBindingOperation>(
+            build.Body.GetProducer(compile.Configuration));
+
+        Assert.Same(configuration.Result, binding.Source);
+        Assert.Contains(configuration.Result, prepare.Outputs);
+        Assert.Contains(configuration.Result, build.Inputs);
+    }
+
+    [Fact]
+    public void LinksReadToLatestOrderedPropertyWrite()
+    {
+        var result = TranslateAsset("OrderedStateVersions.proj", "Build");
+        var first = result.Targets["First"];
+        var second = result.Targets["Second"];
+        var build = result.Targets["Build"];
+        var firstConfiguration = Assert.Single(
+            first.Body.Operations.OfType<ConstantOperation<string>>());
+        var secondConfiguration = Assert.Single(
+            second.Body.Operations.OfType<ConstantOperation<string>>());
+        var compile = Assert.Single(
+            build.Body.Operations.OfType<ToyCompileOperation>());
+        var binding = Assert.IsAssignableFrom<IStateBindingOperation>(
+            build.Body.GetProducer(compile.Configuration));
+
+        Assert.Equal("First", firstConfiguration.Content);
+        Assert.Equal("Second", secondConfiguration.Content);
+        Assert.Same(secondConfiguration.Result, binding.Source);
+        Assert.Same(
+            secondConfiguration.Result,
+            result.Properties["Configuration"]);
+    }
+
+    [Fact]
+    public void LinksPropertyCopyThroughStateRead()
+    {
+        var result = TranslateAsset("PropertyCopy.proj", "Build");
+        var prepare = result.Targets["Prepare"];
+        var binding = Assert.Single(
+            prepare.Body.Operations.OfType<IStateBindingOperation>());
+
+        Assert.Same(
+            binding.Result,
+            result.Properties["Configuration"]);
+        Assert.Contains(binding.Result, prepare.Outputs);
+    }
+
+    [Fact]
+    public void RejectsUnorderedPropertyStateConflict()
+    {
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => TranslateAsset("UnorderedStateConflict.proj", "Build"));
+
+        Assert.Contains(
+            "Targets 'UnrelatedWriter' and 'Build' have conflicting access " +
+            "to property 'Configuration'",
+            exception.Message);
+        Assert.Contains("not ordered", exception.Message);
+    }
+
+    [Fact]
+    public void ReportsReadOnlyStateFromRequestedTargetExecution()
+    {
+        var result = TranslateAsset("ReadOnlyState.proj", "Build");
+        var buildCompile = Assert.Single(
+            result.Targets["Build"].Body.Operations
+                .OfType<ToyCompileOperation>());
+        var configurationBinding =
+            Assert.IsAssignableFrom<IStateBindingOperation>(
+                result.Targets["Build"].Body.GetProducer(
+                    buildCompile.Configuration));
+        var sourcesBinding = Assert.IsAssignableFrom<IStateBindingOperation>(
+            result.Targets["Build"].Body.GetProducer(buildCompile.Sources));
+
+        Assert.Same(
+            configurationBinding.Source,
+            result.Properties["Configuration"]);
+        Assert.Same(
+            sourcesBinding.Source,
+            result.Items["Compile"]);
+    }
+
+    [Fact]
+    public void RejectsConditionalStateWritesUntilMergesAreModeled()
+    {
         var exception = Assert.Throws<NotSupportedException>(
-            () => new MSBuildProjectTranslator().Translate(projectPath, "Build"));
+            () => TranslateAsset("ConditionalStateWrite.proj", "Build"));
 
-        Assert.Contains("non-literal DependsOnTargets", exception.Message);
+        Assert.Contains(
+            "state writes in conditional target 'MaybePrepare'",
+            exception.Message);
+    }
+
+    [Theory]
+    [InlineData("RuntimeDepends.proj", "ChooseDependencies")]
+    [InlineData("RuntimeTaskOutputDepends.proj", "ChooseDependencies")]
+    [InlineData("LateRuntimeDepends.proj", "RewriteDependencies")]
+    public void RejectsTargetDependenciesComputedDuringTargetExecution(
+        string assetName,
+        string assigningTarget)
+    {
+        var exception = Assert.Throws<NotSupportedException>(
+            () => TranslateAsset(assetName, "Entry"));
+
+        Assert.Contains(
+            "DependsOnTargets on target 'Build' references property " +
+            "'BuildDependsOn'",
+            exception.Message);
+        Assert.Contains(
+            $"assigned by target '{assigningTarget}'",
+            exception.Message);
+        Assert.Contains(
+            "must be fixed after project evaluation",
+            exception.Message);
     }
 
     [Theory]
@@ -189,7 +322,8 @@ public sealed class MSBuildProjectTranslatorTests
         var exception = Assert.Throws<InvalidOperationException>(
             () => TranslateAsset("ConflictingAfterOrder.proj", "Build"));
 
-        Assert.Contains("acyclic", exception.Message);
+        Assert.Contains("ordering is contradictory", exception.Message);
+        Assert.Contains("'A' -> 'B' -> 'A'", exception.Message);
     }
 
     [Fact]
@@ -223,10 +357,11 @@ public sealed class MSBuildProjectTranslatorTests
             _ => compileExecuted = true);
         var values = new ValueStore();
 
-        await new OperationGraphExecutor().ExecuteAsync(
-            result.Targets["Build"].Body,
+        await new BuildProgramExecutor(
+            result.Program,
             values,
-            evaluator.EvaluateAsync);
+            evaluator.EvaluateAsync)
+            .ExecuteAsync(result.Targets["Build"]);
 
         Assert.False(values.Get(result.TargetConditions["Build"]));
         Assert.False(compileExecuted);

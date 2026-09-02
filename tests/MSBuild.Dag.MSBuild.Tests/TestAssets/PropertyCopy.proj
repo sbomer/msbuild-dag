@@ -1,0 +1,14 @@
+<Project>
+  <PropertyGroup>
+    <SourceConfiguration>Debug</SourceConfiguration>
+  </PropertyGroup>
+
+  <Target Name="Prepare">
+    <PropertyGroup>
+      <Configuration>$(SourceConfiguration)</Configuration>
+    </PropertyGroup>
+  </Target>
+
+  <Target Name="Build"
+          DependsOnTargets="Prepare" />
+</Project>

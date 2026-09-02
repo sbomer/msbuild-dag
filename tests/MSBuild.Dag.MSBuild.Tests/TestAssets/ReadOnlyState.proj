@@ -1,15 +1,18 @@
 <Project>
   <PropertyGroup>
-    <RunBuild>false</RunBuild>
-    <Configuration>Debug</Configuration>
+    <Configuration>Release</Configuration>
   </PropertyGroup>
 
   <ItemGroup>
     <Compile Include="Program.cs" />
   </ItemGroup>
 
-  <Target Name="Build"
-          Condition="'$(RunBuild)' == 'true'">
+  <Target Name="Other">
+    <ToyCompile Sources="@(Compile)"
+                Configuration="$(Configuration)" />
+  </Target>
+
+  <Target Name="Build">
     <ToyCompile Sources="@(Compile)"
                 Configuration="$(Configuration)" />
   </Target>

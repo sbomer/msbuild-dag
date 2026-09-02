@@ -1,0 +1,19 @@
+<Project>
+  <PropertyGroup>
+    <BuildDependsOn>Prepare</BuildDependsOn>
+  </PropertyGroup>
+
+  <Target Name="Prepare" />
+
+  <Target Name="ChooseDependencies">
+    <PropertyGroup>
+      <BuildDependsOn>Prepare</BuildDependsOn>
+    </PropertyGroup>
+  </Target>
+
+  <Target Name="Build"
+          DependsOnTargets="$(BuildDependsOn)" />
+
+  <Target Name="Entry"
+          DependsOnTargets="ChooseDependencies;Build" />
+</Project>

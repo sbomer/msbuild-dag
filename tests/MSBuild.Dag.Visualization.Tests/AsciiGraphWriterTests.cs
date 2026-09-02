@@ -116,6 +116,35 @@ public sealed class AsciiGraphWriterTests
     }
 
     [Fact]
+    public void RendersExplicitTargetOrderAlongsideDataEdge()
+    {
+        var data = new Value<string>();
+        var producer = new Target(
+            [],
+            [data],
+            new OperationGraph(
+            [
+                new TestOperation([], [data]),
+            ]));
+        var consumer = new Target(
+            [producer],
+            [data],
+            [],
+            new OperationGraph(
+            [
+                new TestOperation([data], []),
+            ]),
+            []);
+
+        var result = AsciiGraphWriter.RenderCompact(
+            new BuildProgram([producer, consumer]));
+
+        Assert.Contains('─', result);
+        Assert.Contains('╎', result);
+        Assert.Contains("order", result);
+    }
+
+    [Fact]
     public void RendersDifferentPreludeOrdersDifferently()
     {
         var first = EmptyTarget();
@@ -228,6 +257,35 @@ public sealed class AsciiGraphWriterTests
         Assert.Equal(2, CountOccurrences(result, "i1"));
         Assert.DoesNotContain("i0▼", result);
         Assert.DoesNotContain("i1▼", result);
+    }
+
+    [Fact]
+    public void ExpandedBuildProgramAlignsInputsWithReorderedBodyConsumers()
+    {
+        var firstInput = new Value<string>();
+        var secondInput = new Value<string>();
+        var firstResult = new Value<string>();
+        var secondResult = new Value<string>();
+        var output = new Value<string>();
+        var first = new TestOperation([firstInput], [firstResult]);
+        var second = new TestOperation([secondInput], [secondResult]);
+        var consumer = new TestOperation(
+            [secondResult, firstResult],
+            [output]);
+        var target = new Target(
+            [firstInput, secondInput],
+            [output],
+            new OperationGraph([first, second, consumer]));
+
+        var result = AsciiGraphWriter.Render(
+            new BuildProgram([target]));
+
+        Assert.DoesNotContain(
+            result.Split(Environment.NewLine),
+            line => line.StartsWith('│') &&
+                line.Contains('┌') &&
+                line.Contains('┼') &&
+                line.Contains('┐'));
     }
 
     private static Target EmptyTarget() =>

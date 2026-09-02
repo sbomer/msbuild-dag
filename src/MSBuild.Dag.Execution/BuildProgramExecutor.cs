@@ -25,6 +25,11 @@ public sealed class BuildProgramExecutor
         _program = program;
         _values = values;
         _executeOperation = executeOperation;
+
+        foreach (var initialValue in program.InitialValues)
+        {
+            _values.SetInitial(initialValue);
+        }
     }
 
     public async ValueTask ExecuteAsync(

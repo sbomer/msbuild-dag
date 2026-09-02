@@ -526,7 +526,7 @@ public static class AsciiGraphWriter
                             SourcePort: isOrderEdge || isGuardEdge ? null : 0,
                             TargetPort: isOrderEdge || isGuardEdge
                                 ? null
-                                : inputIndex,
+                                : GetInputPort(consumer, inputIndex),
                             isOrderEdge,
                             isGuardEdge));
                 }
@@ -628,6 +628,12 @@ public static class AsciiGraphWriter
                 }
             }
 
+            ReorderRanksTowardConsumers(
+                ranks,
+                edges,
+                rowWidths,
+                contentWidth);
+
             var routeLaneCounts = AssignRouteLanes(ranks, edges);
 
             var top = 0;
@@ -686,6 +692,44 @@ public static class AsciiGraphWriter
             return new Layout(nodes, edges, operationNodes, width, height);
         }
 
+        private static void ReorderRanksTowardConsumers(
+            IReadOnlyList<IGrouping<int, Node>> ranks,
+            IReadOnlyList<Edge> edges,
+            IReadOnlyDictionary<int, int> rowWidths,
+            int contentWidth)
+        {
+            for (var rankIndex = ranks.Count - 2; rankIndex >= 0; rankIndex--)
+            {
+                var rank = ranks[rankIndex];
+                var rankNodes = rank
+                    .OrderBy(node => GetConsumerPositionHint(node, edges))
+                    .ThenBy(node => node.Order)
+                    .ToArray();
+                var left =
+                    (contentWidth - rowWidths[rank.Key]) / 2;
+
+                foreach (var node in rankNodes)
+                {
+                    node.Left = left;
+                    left += node.Width + HorizontalGap;
+                }
+            }
+        }
+
+        private static double GetConsumerPositionHint(
+            Node node,
+            IReadOnlyList<Edge> edges)
+        {
+            var outgoing = edges
+                .Where(edge => ReferenceEquals(edge.Source, node))
+                .ToArray();
+
+            return outgoing.Length == 0
+                ? node.Left
+                : outgoing.Average(
+                    edge => edge.Target.GetInputX(edge.TargetSlot));
+        }
+
         private static Dictionary<int, int> AssignRouteLanes(
             IReadOnlyList<IGrouping<int, Node>> ranks,
             IReadOnlyList<Edge> edges)
@@ -700,6 +744,7 @@ public static class AsciiGraphWriter
                 var segments = new List<(
                     int Start,
                     int End,
+                    bool IsOrderEdge,
                     Action<int> AssignLane)>();
 
                 foreach (var edge in edges)
@@ -716,6 +761,7 @@ public static class AsciiGraphWriter
                         AddSegment(
                             edge.Source.GetOutputX(edge.SourceSlot),
                             edge.Target.GetInputX(edge.TargetSlot),
+                            edge.IsOrderEdge,
                             lane => edge.RouteLane = lane);
                     }
                     else if (edge.Source.Rank == sourceRank &&
@@ -724,6 +770,7 @@ public static class AsciiGraphWriter
                         AddSegment(
                             edge.Source.GetOutputX(edge.SourceSlot),
                             edge.LaneX!.Value,
+                            edge.IsOrderEdge,
                             lane => edge.DepartureLane = lane);
                     }
                     else if (edge.Source.Rank < sourceRank &&
@@ -732,20 +779,42 @@ public static class AsciiGraphWriter
                         AddSegment(
                             edge.LaneX!.Value,
                             edge.Target.GetInputX(edge.TargetSlot),
+                            edge.IsOrderEdge,
                             lane => edge.ArrivalLane = lane);
                     }
                 }
 
+                var orderLaneStart = -1;
+
                 foreach (var segment in segments
-                    .OrderBy(
+                    .OrderBy(segment => segment.IsOrderEdge)
+                    .ThenByDescending(
                         segment => segment.End - segment.Start)
                     .ThenBy(segment => segment.Start))
                 {
-                    var laneIndex = lanes.FindIndex(
-                        lane => lane.All(
+                    if (segment.IsOrderEdge && orderLaneStart < 0)
+                    {
+                        orderLaneStart = lanes.Count;
+                    }
+
+                    var minimumLane = segment.IsOrderEdge
+                        ? orderLaneStart
+                        : 0;
+                    var laneIndex = -1;
+
+                    for (var index = minimumLane;
+                        index < lanes.Count;
+                        index++)
+                    {
+                        if (lanes[index].All(
                             existing =>
                                 segment.End < existing.Start ||
-                                segment.Start > existing.End));
+                                segment.Start > existing.End))
+                        {
+                            laneIndex = index;
+                            break;
+                        }
+                    }
 
                     if (laneIndex < 0)
                     {
@@ -762,6 +831,7 @@ public static class AsciiGraphWriter
                 void AddSegment(
                     int firstX,
                     int secondX,
+                    bool isOrderEdge,
                     Action<int> assignLane)
                 {
                     if (firstX == secondX)
@@ -773,6 +843,7 @@ public static class AsciiGraphWriter
                     segments.Add(
                         (Math.Min(firstX, secondX),
                          Math.Max(firstX, secondX),
+                         isOrderEdge,
                          assignLane));
                 }
             }
@@ -821,7 +892,7 @@ public static class AsciiGraphWriter
                 return outgoing.Min(
                     edge =>
                         (edge.Target.Order * 1_000) +
-                        edge.TargetSlot);
+                        edge.Target.GetInputX(edge.TargetSlot));
             }
 
             var incoming = edges

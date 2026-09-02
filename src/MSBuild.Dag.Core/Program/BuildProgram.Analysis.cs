@@ -85,6 +85,35 @@ public sealed partial class BuildProgram
         return operationOwners;
     }
 
+    private void ValidateInitialValues(
+        IReadOnlyDictionary<Operation, Target> operationOwners)
+    {
+        var values = new HashSet<Value>(
+            ReferenceEqualityComparer.Instance);
+        var operationOutputs = new HashSet<Value>(
+            operationOwners.Keys.SelectMany(operation => operation.Outputs),
+            ReferenceEqualityComparer.Instance);
+
+        foreach (var initialValue in InitialValues)
+        {
+            ArgumentNullException.ThrowIfNull(initialValue);
+
+            if (!values.Add(initialValue.Value))
+            {
+                throw new ArgumentException(
+                    "A value cannot be initialized more than once.",
+                    nameof(InitialValues));
+            }
+
+            if (operationOutputs.Contains(initialValue.Value))
+            {
+                throw new ArgumentException(
+                    "An initial value cannot also be produced by an operation.",
+                    nameof(InitialValues));
+            }
+        }
+    }
+
     private void ValidateTargetReferences()
     {
         var targets = new HashSet<Target>(Targets, ReferenceEqualityComparer.Instance);

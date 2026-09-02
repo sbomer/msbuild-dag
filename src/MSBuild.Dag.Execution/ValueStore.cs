@@ -70,4 +70,33 @@ public sealed class ValueStore
             throw new InvalidOperationException("A value can only be assigned once.");
         }
     }
+
+    internal void SetInitial(InitialValue initialValue)
+    {
+        ArgumentNullException.ThrowIfNull(initialValue);
+
+        if (!_values.TryAdd(initialValue.Value, initialValue.Content))
+        {
+            throw new InvalidOperationException(
+                "An initial value can only be assigned once.");
+        }
+    }
+
+    internal void Copy(Value source, Value result)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(result);
+
+        if (!_values.TryGetValue(source, out var content))
+        {
+            throw new InvalidOperationException(
+                "The source value has not been assigned.");
+        }
+
+        if (!_values.TryAdd(result, content))
+        {
+            throw new InvalidOperationException(
+                "A value can only be assigned once.");
+        }
+    }
 }

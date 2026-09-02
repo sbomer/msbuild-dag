@@ -1,25 +1,24 @@
 <Project>
   <PropertyGroup>
     <Configuration>Release</Configuration>
-    <BuildDependsOn>Prepare</BuildDependsOn>
   </PropertyGroup>
 
   <ItemGroup>
     <Compile Include="Program.cs" />
   </ItemGroup>
 
-  <Target Name="Prepare">
-    <PropertyGroup>
-      <Configuration>Debug</Configuration>
-    </PropertyGroup>
-  </Target>
-
   <Target Name="Build"
-          DependsOnTargets="$(BuildDependsOn)">
+          DependsOnTargets="Prepare">
     <ToyCompile Sources="@(Compile)"
                 Configuration="$(Configuration)">
       <Output TaskParameter="Assembly"
               PropertyName="AssemblyPath" />
     </ToyCompile>
+  </Target>
+
+  <Target Name="Prepare">
+    <PropertyGroup>
+      <Configuration>Debug</Configuration>
+    </PropertyGroup>
   </Target>
 </Project>

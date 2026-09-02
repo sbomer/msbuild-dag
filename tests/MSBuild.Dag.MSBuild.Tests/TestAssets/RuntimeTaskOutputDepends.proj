@@ -1,0 +1,19 @@
+<Project>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+  </ItemGroup>
+
+  <Target Name="ChooseDependencies">
+    <ToyCompile Sources="@(Compile)"
+                Configuration="Debug">
+      <Output TaskParameter="Assembly"
+              PropertyName="BuildDependsOn" />
+    </ToyCompile>
+  </Target>
+
+  <Target Name="Build"
+          DependsOnTargets="$(BuildDependsOn)" />
+
+  <Target Name="Entry"
+          DependsOnTargets="ChooseDependencies;Build" />
+</Project>

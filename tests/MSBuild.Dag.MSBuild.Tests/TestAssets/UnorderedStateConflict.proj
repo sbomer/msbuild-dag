@@ -1,15 +1,19 @@
 <Project>
   <PropertyGroup>
-    <RunBuild>false</RunBuild>
-    <Configuration>Debug</Configuration>
+    <Configuration>Release</Configuration>
   </PropertyGroup>
 
   <ItemGroup>
     <Compile Include="Program.cs" />
   </ItemGroup>
 
-  <Target Name="Build"
-          Condition="'$(RunBuild)' == 'true'">
+  <Target Name="UnrelatedWriter">
+    <PropertyGroup>
+      <Configuration>Incorrect</Configuration>
+    </PropertyGroup>
+  </Target>
+
+  <Target Name="Build">
     <ToyCompile Sources="@(Compile)"
                 Configuration="$(Configuration)" />
   </Target>

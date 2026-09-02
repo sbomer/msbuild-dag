@@ -64,7 +64,14 @@ public sealed class OperationGraphExecutor
                 return;
             }
 
-            await executeOperation(operation, values, cancellationToken);
+            if (operation is IStateBindingOperation binding)
+            {
+                values.Copy(binding.Source, binding.Result);
+            }
+            else
+            {
+                await executeOperation(operation, values, cancellationToken);
+            }
 
             if (operation is IOrderedOperation
                 {

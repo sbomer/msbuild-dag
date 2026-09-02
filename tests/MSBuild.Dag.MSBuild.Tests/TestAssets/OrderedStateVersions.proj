@@ -1,0 +1,27 @@
+<Project>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+  </ItemGroup>
+
+  <Target Name="Build"
+          DependsOnTargets="Second">
+    <ToyCompile Sources="@(Compile)"
+                Configuration="$(Configuration)">
+      <Output TaskParameter="Assembly"
+              PropertyName="AssemblyPath" />
+    </ToyCompile>
+  </Target>
+
+  <Target Name="First">
+    <PropertyGroup>
+      <Configuration>First</Configuration>
+    </PropertyGroup>
+  </Target>
+
+  <Target Name="Second"
+          DependsOnTargets="First">
+    <PropertyGroup>
+      <Configuration>Second</Configuration>
+    </PropertyGroup>
+  </Target>
+</Project>

@@ -1,12 +1,19 @@
 <Project>
   <PropertyGroup>
     <BuildDependsOn>Prepare</BuildDependsOn>
-    <BuildDependsOn>$(BuildDependsOn);CollectSources</BuildDependsOn>
   </PropertyGroup>
 
   <Target Name="Prepare" />
-  <Target Name="CollectSources" />
 
   <Target Name="Build"
           DependsOnTargets="$(BuildDependsOn)" />
+
+  <Target Name="RewriteDependencies">
+    <PropertyGroup>
+      <BuildDependsOn />
+    </PropertyGroup>
+  </Target>
+
+  <Target Name="Entry"
+          DependsOnTargets="Build;RewriteDependencies" />
 </Project>

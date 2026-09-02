@@ -1,6 +1,7 @@
 <Project>
   <PropertyGroup>
     <Configuration>Release</Configuration>
+    <BuildDependsOn>Prepare;CollectSources</BuildDependsOn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -20,7 +21,7 @@
   </Target>
 
   <Target Name="Build"
-          DependsOnTargets="Prepare;CollectSources">
+          DependsOnTargets="$(BuildDependsOn)">
     <ToyCompile Sources="@(Compile)"
                 Configuration="$(Configuration)">
       <Output TaskParameter="Assembly"

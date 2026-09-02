@@ -1,0 +1,15 @@
+<Project>
+  <PropertyGroup>
+    <Enabled>false</Enabled>
+  </PropertyGroup>
+
+  <Target Name="MaybePrepare"
+          Condition="'$(Enabled)' == 'true'">
+    <PropertyGroup>
+      <Configuration>Debug</Configuration>
+    </PropertyGroup>
+  </Target>
+
+  <Target Name="Build"
+          DependsOnTargets="MaybePrepare" />
+</Project>

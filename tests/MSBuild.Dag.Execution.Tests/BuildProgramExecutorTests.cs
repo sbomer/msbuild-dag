@@ -206,6 +206,42 @@ public sealed class BuildProgramExecutorTests
     }
 
     [Fact]
+    public async Task ExecutesStateReadBoundToEvaluationSnapshot()
+    {
+        var location = new StateLocation<int>();
+        var read = new StateRead<int>(location);
+        var operation = new UnaryOperation(read.Value);
+        var definition = new TargetDefinition(
+            [],
+            [read],
+            [],
+            [operation.Result],
+            new OperationGraph([operation]),
+            []);
+        var linked = new BuildDefinition(
+            new EvaluationSnapshot(
+            [
+                new StateInitialization<int>(location, 41),
+            ]),
+            [definition])
+            .Link();
+        var values = new ValueStore();
+        var executor = new BuildProgramExecutor(
+            linked.Program,
+            values,
+            static (candidate, store, _) =>
+            {
+                var unary = (UnaryOperation)candidate;
+                store.Set(unary.Result, store.Get(unary.Input) + 1);
+                return ValueTask.CompletedTask;
+            });
+
+        await executor.ExecuteAsync(linked.Targets[definition]);
+
+        Assert.Equal(42, values.Get(operation.Result));
+    }
+
+    [Fact]
     public async Task InactiveGuardSkipsOperation()
     {
         var guard = new Value<GuardToken>();
