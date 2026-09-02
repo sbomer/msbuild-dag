@@ -3,9 +3,15 @@
     <Subset>clr+libs-native</Subset>
   </PropertyGroup>
 
+  <ItemGroup>
+    <SubsetName Include="clr;native" />
+  </ItemGroup>
+
   <Target Name="Build">
     <ItemGroup>
       <SpecifiedSubsetName Include="$([MSBuild]::Unescape($(Subset.Replace('+', ';').Replace('-', ';'))))" />
+      <InvalidSpecifiedSubsetName Include="@(SpecifiedSubsetName)"
+                                  Exclude="@(SubsetName)" />
     </ItemGroup>
   </Target>
 </Project>

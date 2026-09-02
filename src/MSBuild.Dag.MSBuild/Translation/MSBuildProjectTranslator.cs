@@ -519,6 +519,7 @@ public sealed class MSBuildProjectTranslator
                     {
                         AddItemRead(item.ItemType);
                         AddItemExpressionRead(item.Include);
+                        AddItemExpressionRead(item.Exclude);
                         writeItems.Add(item.ItemType);
                     }
 
@@ -850,15 +851,28 @@ public sealed class MSBuildProjectTranslator
             }
 
             if (string.IsNullOrWhiteSpace(item.Include) ||
-                !string.IsNullOrWhiteSpace(item.Exclude) ||
                 !string.IsNullOrWhiteSpace(item.Remove) ||
                 item.Metadata.Count > 0)
             {
-                throw Unsupported("item operations other than a simple Include");
+                throw Unsupported(
+                    "item operations other than Include with optional Exclude");
             }
 
             var existingItems = context.GetItems(item.ItemType);
             var appendedItems = context.ResolveItemsExpression(item.Include);
+
+            if (!string.IsNullOrWhiteSpace(item.Exclude))
+            {
+                var excludedItems =
+                    context.ResolveItemsExpression(item.Exclude);
+                var exclude = new ExcludeItemsOperation(
+                    appendedItems,
+                    excludedItems,
+                    context.CreateControl());
+                context.AddOperation(exclude);
+                appendedItems = exclude.Result;
+            }
+
             var concat = new ConcatItemsOperation(
                 existingItems,
                 appendedItems,

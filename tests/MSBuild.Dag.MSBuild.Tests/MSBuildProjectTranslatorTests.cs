@@ -223,6 +223,8 @@ public sealed class MSBuildProjectTranslatorTests
         var build = result.Targets["Build"];
         var expansion = Assert.Single(
             build.Body.Operations.OfType<ExpandItemsExpressionOperation>());
+        var exclusion = Assert.Single(
+            build.Body.Operations.OfType<ExcludeItemsOperation>());
         var binding = Assert.IsAssignableFrom<IStateBindingOperation>(
             build.Body.GetProducer(expansion.Source));
         var values = new ValueStore();
@@ -250,6 +252,13 @@ public sealed class MSBuildProjectTranslatorTests
         Assert.Equal(
             ["clr", "libs", "native"],
             values.Get(result.Items["SpecifiedSubsetName"]));
+        var specifiedItems = Assert.IsType<ConcatItemsOperation>(
+            build.Body.GetProducer(exclusion.IncludedItems));
+
+        Assert.Same(expansion.Result, specifiedItems.AppendedItems);
+        Assert.Equal(
+            ["libs"],
+            values.Get(result.Items["InvalidSpecifiedSubsetName"]));
     }
 
     [Fact]
@@ -580,6 +589,18 @@ public sealed class MSBuildProjectTranslatorTests
                         operation.Result,
                         values.Get(operation.ExistingItems)
                             .Concat(values.Get(operation.AppendedItems))
+                            .ToArray());
+                    return ValueTask.CompletedTask;
+                })
+            .Add<ExcludeItemsOperation>(
+                static (operation, values, _) =>
+                {
+                    var excludedItems = values.Get(operation.ExcludedItems)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    values.Set(
+                        operation.Result,
+                        values.Get(operation.IncludedItems)
+                            .Where(item => !excludedItems.Contains(item))
                             .ToArray());
                     return ValueTask.CompletedTask;
                 })

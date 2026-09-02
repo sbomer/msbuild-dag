@@ -30,6 +30,18 @@ internal static class TranslatedOperationEvaluator
                             .ToArray());
                     return ValueTask.CompletedTask;
                 })
+            .Add<ExcludeItemsOperation>(
+                static (operation, values, _) =>
+                {
+                    var excludedItems = values.Get(operation.ExcludedItems)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    values.Set(
+                        operation.Result,
+                        values.Get(operation.IncludedItems)
+                            .Where(item => !excludedItems.Contains(item))
+                            .ToArray());
+                    return ValueTask.CompletedTask;
+                })
             .Add<ExpandItemsExpressionOperation>(
                 static (operation, values, _) =>
                 {
