@@ -318,6 +318,58 @@ public sealed class AsciiGraphWriterTests
     }
 
     [Fact]
+    public void ExpandedBuildProgramKeepsIncomingRoutesOffBodyOutputs()
+    {
+        var firstInput = new Value<string>();
+        var secondInput = new Value<string>();
+        var shared = new Value<string>();
+        var firstResult = new Value<string>();
+        var secondResult = new Value<string>();
+        var producer = new TestOperation([firstInput], [shared]);
+        var firstConsumer = new TestOperation(
+            [shared, secondInput],
+            [firstResult]);
+        var secondConsumer = new TestOperation(
+            [shared],
+            [secondResult]);
+        var target = new Target(
+            [firstInput, secondInput],
+            [firstResult, secondResult],
+            new OperationGraph(
+                [producer, firstConsumer, secondConsumer]));
+
+        var lines = AsciiGraphWriter.Render(
+                new BuildProgram([target]))
+            .Split(Environment.NewLine);
+        var producerLine = Array.FindIndex(
+            lines,
+            line => line.Contains("[2] TestOperation"));
+        var outputColumn = lines[producerLine + 1].IndexOf('┬');
+
+        Assert.DoesNotContain(
+            lines.Skip(producerLine + 2).Take(2),
+            line =>
+                outputColumn < line.Length &&
+                line[outputColumn] == '┼');
+        Assert.DoesNotContain(
+            Enumerable.Range(0, lines.Length - 1),
+            lineIndex => Enumerable.Range(
+                    0,
+                    Math.Min(lines[lineIndex].Length, lines[lineIndex + 1].Length))
+                .Any(column =>
+                    (lines[lineIndex][column] is '│' or '╎') &&
+                    (lines[lineIndex + 1][column] is '┌' or '┐')));
+        Assert.DoesNotContain(
+            Enumerable.Range(0, lines.Length - 1),
+            lineIndex => Enumerable.Range(
+                    0,
+                    Math.Min(lines[lineIndex].Length, lines[lineIndex + 1].Length))
+                .Any(column =>
+                    (lines[lineIndex][column] is '─' or '╌') &&
+                    (lines[lineIndex + 1][column] is '│' or '╎')));
+    }
+
+    [Fact]
     public void ExpandedBuildProgramConnectsEarlyOutputToTargetBoundary()
     {
         var input = new Value<string>();

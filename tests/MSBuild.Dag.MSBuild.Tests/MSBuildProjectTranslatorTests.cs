@@ -308,6 +308,33 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Theory]
+    [InlineData("ConditionalProperty.proj", "Debug")]
+    [InlineData("ConditionalPropertyFalse.proj", "Release")]
+    public async Task ExecutesConditionalPropertyAssignment(
+        string assetName,
+        string expectedConfiguration)
+    {
+        var result = TranslateAsset(assetName, "Build");
+        var build = result.Targets["Build"];
+        var select = Assert.Single(
+            build.Body.Operations.OfType<SelectOperation<string>>());
+        var values = new ValueStore();
+
+        await new BuildProgramExecutor(
+            result.Program,
+            values,
+            CreateEvaluator().EvaluateAsync)
+            .ExecuteAsync(build);
+
+        Assert.Same(
+            select.Result,
+            result.Properties["Configuration"]);
+        Assert.Equal(
+            expectedConfiguration,
+            values.Get(result.Properties["Configuration"]));
+    }
+
+    [Theory]
     [InlineData("RuntimeDepends.proj", "ChooseDependencies")]
     [InlineData("RuntimeTaskOutputDepends.proj", "ChooseDependencies")]
     [InlineData("LateRuntimeDepends.proj", "RewriteDependencies")]

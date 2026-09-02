@@ -1,0 +1,12 @@
+<Project>
+  <PropertyGroup>
+    <UseDebug>true</UseDebug>
+    <Configuration>Release</Configuration>
+  </PropertyGroup>
+
+  <Target Name="Build">
+    <PropertyGroup>
+      <Configuration Condition="'$(UseDebug)' == 'true'">Debug</Configuration>
+    </PropertyGroup>
+  </Target>
+</Project>

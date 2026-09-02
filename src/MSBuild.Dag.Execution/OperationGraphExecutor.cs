@@ -68,6 +68,14 @@ public sealed class OperationGraphExecutor
             {
                 values.Copy(binding.Source, binding.Result);
             }
+            else if (operation is ISelectOperation select)
+            {
+                values.Copy(
+                    values.Get(select.Condition)
+                        ? select.WhenTrue
+                        : select.WhenFalse,
+                    select.Result);
+            }
             else
             {
                 await executeOperation(operation, values, cancellationToken);

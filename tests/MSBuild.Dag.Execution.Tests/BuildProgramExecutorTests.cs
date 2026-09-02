@@ -175,6 +175,36 @@ public sealed class BuildProgramExecutorTests
         Assert.Contains("output", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Theory]
+    [InlineData(true, "new")]
+    [InlineData(false, "previous")]
+    public async Task ExecutesSelectOperation(
+        bool conditionContent,
+        string expected)
+    {
+        var condition = new Value<bool>();
+        var whenTrue = new Value<string>();
+        var whenFalse = new Value<string>();
+        var select = new SelectOperation<string>(
+            condition,
+            whenTrue,
+            whenFalse);
+        var values = new ValueStore();
+        values.Set(condition, conditionContent);
+        values.Set(whenTrue, "new");
+        values.Set(whenFalse, "previous");
+
+        await new OperationGraphExecutor().ExecuteAsync(
+            new OperationGraph([select]),
+            values,
+            static (_, _, _) =>
+                ValueTask.FromException(
+                    new InvalidOperationException(
+                        "Select should execute intrinsically.")));
+
+        Assert.Equal(expected, values.Get(select.Result));
+    }
+
     [Fact]
     public async Task EvaluatorDispatchesByOperationType()
     {

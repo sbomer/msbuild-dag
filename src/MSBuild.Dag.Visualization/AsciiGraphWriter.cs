@@ -183,6 +183,8 @@ public static class AsciiGraphWriter
             DrawEdge(canvas, edge);
         }
 
+        DrawSharedSourceJunctions(canvas, layout.Edges);
+
         foreach (var node in layout.Nodes)
         {
             DrawNode(canvas, node);
@@ -194,6 +196,52 @@ public static class AsciiGraphWriter
         }
 
         canvas.WriteTo(writer);
+    }
+
+    private static void DrawSharedSourceJunctions(
+        Canvas canvas,
+        IReadOnlyList<Edge> edges)
+    {
+        foreach (var group in edges
+            .Where(edge =>
+                edge.Source.GetOutputX(edge.SourceSlot) !=
+                edge.Target.GetInputX(edge.TargetSlot))
+            .Select(edge => (
+                Edge: edge,
+                RouteY: edge.DepartureY ??
+                    Math.Min(
+                        edge.Target.Top - 2,
+                        Math.Max(
+                            edge.Source.Bottom + 2,
+                            edge.SourceRankBottom + 2) +
+                        ((edge.RouteLane ?? 0) * 2))))
+            .GroupBy(entry => (
+                entry.Edge.Source,
+                entry.Edge.SourceSlot,
+                entry.RouteY))
+            .Where(group => group.Count() > 1))
+        {
+            var sourceX = group.Key.Source.GetOutputX(group.Key.SourceSlot);
+            var routesLeft = group.Any(
+                entry =>
+                    (entry.Edge.LaneX ??
+                     entry.Edge.Target.GetInputX(entry.Edge.TargetSlot)) <
+                    sourceX);
+            var routesRight = group.Any(
+                entry =>
+                    (entry.Edge.LaneX ??
+                     entry.Edge.Target.GetInputX(entry.Edge.TargetSlot)) >
+                    sourceX);
+            var junction = (routesLeft, routesRight) switch
+            {
+                (true, true) => '┴',
+                (true, false) => '┘',
+                (false, true) => '└',
+                _ => '│',
+            };
+
+            canvas.Overwrite(sourceX, group.Key.RouteY, junction);
+        }
     }
 
     private static void DrawEdge(Canvas canvas, Edge edge)
@@ -274,7 +322,7 @@ public static class AsciiGraphWriter
 
         var middleY = Math.Min(
             lastRouteY,
-            firstRouteY + (edge.RouteLane ?? 0));
+            firstRouteY + ((edge.RouteLane ?? 0) * 2));
         var sourceCornerOccupied = canvas.IsPopulated(sourceX, middleY);
         var targetCornerOccupied = canvas.IsPopulated(targetX, middleY);
         canvas.DrawVertical(
@@ -657,7 +705,7 @@ public static class AsciiGraphWriter
                     var routeLaneCount = routeLaneCounts[rank.Key];
                     var routingGap = routeLaneCount == 0
                         ? boundaryOnlyGap ? 1 : 3
-                        : routeLaneCount + (boundaryOnlyGap ? 1 : 2);
+                        : (routeLaneCount * 2) + 1;
 
                     top += rank.Max(node => node.Height) + routingGap;
                 }
@@ -678,13 +726,15 @@ public static class AsciiGraphWriter
             foreach (var edge in longEdges)
             {
                 edge.DepartureY =
-                    edge.SourceRankBottom + 2 + edge.DepartureLane!.Value;
+                    edge.SourceRankBottom +
+                    2 +
+                    (edge.DepartureLane!.Value * 2);
                 var precedingTargetRank =
                     ranks[rankIndexes[edge.Target.Rank] - 1];
                 edge.ArrivalY =
                     precedingTargetRank.Max(node => node.Bottom) +
                     2 +
-                    edge.ArrivalLane!.Value;
+                    (edge.ArrivalLane!.Value * 2);
             }
 
             var width = contentWidth + 2 + (longEdges.Length * 2);
@@ -782,11 +832,16 @@ public static class AsciiGraphWriter
             {
                 var sourceRank = ranks[rankIndex].Key;
                 var targetRank = ranks[rankIndex + 1].Key;
-                var lanes = new List<List<(int Start, int End)>>();
+                var lanes = new List<List<(
+                    int Start,
+                    int End,
+                    (Node Source, int Slot)? SourceGroup)>>();
                 var segments = new List<(
                     int Start,
                     int End,
+                    int SourceX,
                     bool IsOrderEdge,
+                    (Node Source, int Slot)? SourceGroup,
                     Action<int> AssignLane)>();
 
                 foreach (var edge in edges)
@@ -804,6 +859,7 @@ public static class AsciiGraphWriter
                             edge.Source.GetOutputX(edge.SourceSlot),
                             edge.Target.GetInputX(edge.TargetSlot),
                             edge.IsOrderEdge,
+                            (edge.Source, edge.SourceSlot),
                             lane => edge.RouteLane = lane);
                     }
                     else if (edge.Source.Rank == sourceRank &&
@@ -813,6 +869,7 @@ public static class AsciiGraphWriter
                             edge.Source.GetOutputX(edge.SourceSlot),
                             edge.LaneX!.Value,
                             edge.IsOrderEdge,
+                            (edge.Source, edge.SourceSlot),
                             lane => edge.DepartureLane = lane);
                     }
                     else if (edge.Source.Rank < sourceRank &&
@@ -822,6 +879,7 @@ public static class AsciiGraphWriter
                             edge.LaneX!.Value,
                             edge.Target.GetInputX(edge.TargetSlot),
                             edge.IsOrderEdge,
+                            sourceGroup: null,
                             lane => edge.ArrivalLane = lane);
                     }
                 }
@@ -830,6 +888,12 @@ public static class AsciiGraphWriter
 
                 foreach (var segment in segments
                     .OrderBy(segment => segment.IsOrderEdge)
+                    .ThenByDescending(
+                        segment => segments.Count(
+                            other =>
+                                other.SourceGroup != segment.SourceGroup &&
+                                other.Start < segment.SourceX &&
+                                segment.SourceX < other.End))
                     .ThenByDescending(
                         segment => segment.End - segment.Start)
                     .ThenBy(segment => segment.Start))
@@ -850,6 +914,8 @@ public static class AsciiGraphWriter
                     {
                         if (lanes[index].All(
                             existing =>
+                                (segment.SourceGroup is not null &&
+                                 segment.SourceGroup == existing.SourceGroup) ||
                                 segment.End < existing.Start ||
                                 segment.Start > existing.End))
                         {
@@ -864,7 +930,8 @@ public static class AsciiGraphWriter
                         lanes.Add([]);
                     }
 
-                    lanes[laneIndex].Add((segment.Start, segment.End));
+                    lanes[laneIndex].Add(
+                        (segment.Start, segment.End, segment.SourceGroup));
                     segment.AssignLane(laneIndex);
                 }
 
@@ -874,6 +941,7 @@ public static class AsciiGraphWriter
                     int firstX,
                     int secondX,
                     bool isOrderEdge,
+                    (Node Source, int Slot)? sourceGroup,
                     Action<int> assignLane)
                 {
                     if (firstX == secondX)
@@ -885,7 +953,9 @@ public static class AsciiGraphWriter
                     segments.Add(
                         (Math.Min(firstX, secondX),
                          Math.Max(firstX, secondX),
+                         firstX,
                          isOrderEdge,
+                         sourceGroup,
                          assignLane));
                 }
             }
@@ -1430,23 +1500,59 @@ public static class AsciiGraphWriter
         public void Set(int x, int y, char character)
         {
             var existing = _characters[y, x];
+            var existingConnections = GetConnections(existing);
+            var newConnections = GetConnections(character);
 
             _characters[y, x] = (existing, character) switch
             {
                 ('\0', _) => character,
-                _ when IsHorizontal(existing) && IsVertical(character) => '┼',
-                _ when IsVertical(existing) && IsHorizontal(character) => '┼',
-                ('┼', _) or (_, '┼') => '┼',
                 _ when existing == character => existing,
+                _ when existingConnections != 0 && newConnections != 0 =>
+                    GetConnectionCharacter(
+                        existingConnections | newConnections,
+                        existing,
+                        character),
                 _ => character,
             };
         }
 
-        private static bool IsHorizontal(char character) =>
-            character is '─' or '╌';
+        private static int GetConnections(char character) =>
+            character switch
+            {
+                '─' or '╌' => 0b1010,
+                '│' or '╎' => 0b0101,
+                '┌' => 0b0110,
+                '┐' => 0b1100,
+                '└' => 0b0011,
+                '┘' => 0b1001,
+                '├' => 0b0111,
+                '┤' => 0b1101,
+                '┬' => 0b1110,
+                '┴' => 0b1011,
+                '┼' => 0b1111,
+                _ => 0,
+            };
 
-        private static bool IsVertical(char character) =>
-            character is '│' or '╎';
+        private static char GetConnectionCharacter(
+            int connections,
+            char existing,
+            char character) =>
+            connections switch
+            {
+                0b1010 when existing == '╌' || character == '╌' => '╌',
+                0b0101 when existing == '╎' || character == '╎' => '╎',
+                0b1010 => '─',
+                0b0101 => '│',
+                0b0110 => '┌',
+                0b1100 => '┐',
+                0b0011 => '└',
+                0b1001 => '┘',
+                0b0111 => '├',
+                0b1101 => '┤',
+                0b1110 => '┬',
+                0b1011 => '┴',
+                _ => '┼',
+            };
 
         public void Overwrite(int x, int y, char character)
         {

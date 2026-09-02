@@ -2,6 +2,7 @@
     <PropertyGroup>
         <Key>V0</Key>
         <Subset>clr+libs-native</Subset>
+        <UseV2>true</UseV2>
     </PropertyGroup>
 
     <Target Name="A">
@@ -17,7 +18,7 @@
         </ItemGroup>
         <Message Text="$(Key)" />
         <PropertyGroup>
-            <Key>V2</Key>
+            <Key Condition="'$(UseV2)' == 'true'">V2</Key>
         </PropertyGroup>
     </Target>
 

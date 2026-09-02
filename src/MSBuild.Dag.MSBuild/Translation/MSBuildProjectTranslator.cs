@@ -509,6 +509,13 @@ public sealed class MSBuildProjectTranslator
                     foreach (var property in propertyGroup.Properties)
                     {
                         AddPropertyExpressionRead(property.Value);
+
+                        if (!string.IsNullOrWhiteSpace(property.Condition))
+                        {
+                            AddPropertyRead(property.Name);
+                            AddConditionRead(property.Condition);
+                        }
+
                         writeProperties.Add(property.Name);
                     }
 
@@ -566,6 +573,16 @@ public sealed class MSBuildProjectTranslator
             if (TryGetReference(expression, "$(", out var propertyName))
             {
                 AddPropertyRead(propertyName);
+            }
+        }
+
+        void AddConditionRead(string expression)
+        {
+            var match = s_comparisonCondition.Match(expression);
+
+            if (match.Success)
+            {
+                AddPropertyRead(match.Groups["property"].Value);
             }
         }
 
@@ -824,13 +841,23 @@ public sealed class MSBuildProjectTranslator
 
         foreach (var property in propertyGroup.Properties)
         {
-            if (!string.IsNullOrWhiteSpace(property.Condition))
+            if (string.IsNullOrWhiteSpace(property.Condition))
             {
-                throw Unsupported("property conditions");
+                context.Properties[property.Name] =
+                    context.ResolvePropertyExpression(property.Value);
+                continue;
             }
 
-            context.Properties[property.Name] =
+            var previousValue = context.GetProperty(property.Name);
+            var condition = context.TranslateCondition(property.Condition);
+            var assignedValue =
                 context.ResolvePropertyExpression(property.Value);
+            var select = new SelectOperation<string>(
+                condition,
+                assignedValue,
+                previousValue);
+            context.AddOperation(select, ordered: false);
+            context.Properties[property.Name] = select.Result;
         }
     }
 
@@ -1198,7 +1225,7 @@ public sealed class MSBuildProjectTranslator
                 $"Item state '{itemType}' was not declared as a target read.");
         }
 
-        private Value<string> GetProperty(string propertyName)
+        public Value<string> GetProperty(string propertyName)
         {
             if (Properties.TryGetValue(propertyName, out var value))
             {
