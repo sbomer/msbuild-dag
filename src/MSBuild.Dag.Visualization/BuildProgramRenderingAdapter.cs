@@ -2,12 +2,12 @@ using MSBuild.Dag.Core;
 
 namespace MSBuild.Dag.Visualization;
 
-internal sealed class BuildGraphRenderingAdapter
+internal sealed class BuildProgramRenderingAdapter
 {
     private readonly IReadOnlyDictionary<Operation, string> _labels;
     private readonly IReadOnlyDictionary<Operation, GraphNodeContent> _contents;
 
-    private BuildGraphRenderingAdapter(
+    private BuildProgramRenderingAdapter(
         OperationGraph graph,
         IReadOnlyDictionary<Operation, string> labels,
         IReadOnlyDictionary<Operation, GraphNodeContent> contents)
@@ -24,8 +24,8 @@ internal sealed class BuildGraphRenderingAdapter
     public GraphNodeContent? GetContent(Operation operation) =>
         _contents.GetValueOrDefault(operation);
 
-    public static BuildGraphRenderingAdapter Create(
-        BuildGraph graph,
+    public static BuildProgramRenderingAdapter Create(
+        BuildProgram program,
         IReadOnlyDictionary<Target, string>? targetNames,
         bool includeTargetBodies = false)
     {
@@ -34,7 +34,7 @@ internal sealed class BuildGraphRenderingAdapter
         var outputs = new Dictionary<Target, List<(Value Value, int? Port)>>(
             ReferenceEqualityComparer.Instance);
 
-        foreach (var target in graph.Targets)
+        foreach (var target in program.Targets)
         {
             inputs.Add(target, []);
             outputs.Add(
@@ -44,57 +44,60 @@ internal sealed class BuildGraphRenderingAdapter
                     .ToList());
         }
 
-        var orderValues = new Dictionary<TargetDependency, Value<OrderToken>>();
+        var orderValues =
+            new Dictionary<(Target Before, Target After), Value<OrderToken>>();
 
-        foreach (var dependency in graph.ExplicitDependencies)
+        foreach (var target in program.Targets)
         {
-            var order = new Value<OrderToken>();
-            orderValues.Add(dependency, order);
-            outputs[dependency.Prerequisite].Add((order, null));
+            foreach (var predecessor in program.GetOrderPredecessors(target))
+            {
+                var order = new Value<OrderToken>();
+                orderValues.Add((predecessor, target), order);
+                outputs[predecessor].Add((order, null));
+            }
         }
 
-        foreach (var target in graph.Targets)
+        foreach (var target in program.Targets)
         {
             for (var index = 0; index < target.Inputs.Count; index++)
             {
-                if (graph.GetProducer(target.Inputs[index]) is null)
+                if (program.GetProducer(target.Inputs[index]) is null)
                 {
                     inputs[target].Add((target.Inputs[index], index));
                 }
             }
 
-            foreach (var prerequisite in graph.Targets)
+            foreach (var prerequisite in program.Targets)
             {
                 for (var index = 0; index < target.Inputs.Count; index++)
                 {
                     if (ReferenceEquals(
-                        graph.GetProducer(target.Inputs[index]),
+                        program.GetProducer(target.Inputs[index]),
                         prerequisite))
                     {
                         inputs[target].Add((target.Inputs[index], index));
                     }
                 }
 
-                foreach (var dependency in graph.ExplicitDependencies)
+                if (program.GetOrderPredecessors(target).Contains(
+                    prerequisite,
+                    ReferenceEqualityComparer.Instance))
                 {
-                    if (ReferenceEquals(dependency.Prerequisite, prerequisite) &&
-                        ReferenceEquals(dependency.Dependent, target))
-                    {
-                        inputs[target].Add((orderValues[dependency], null));
-                    }
+                    inputs[target].Add(
+                        (orderValues[(prerequisite, target)], null));
                 }
             }
         }
 
-        var operations = new List<Operation>(graph.Targets.Count);
+        var operations = new List<Operation>(program.Targets.Count);
         var labels = new Dictionary<Operation, string>(
             ReferenceEqualityComparer.Instance);
         var contents = new Dictionary<Operation, GraphNodeContent>(
             ReferenceEqualityComparer.Instance);
 
-        for (var index = 0; index < graph.Targets.Count; index++)
+        for (var index = 0; index < program.Targets.Count; index++)
         {
-            var target = graph.Targets[index];
+            var target = program.Targets[index];
             var operation = new TargetNodeOperation(
                 inputs[target].Select(static entry => entry.Value).ToArray(),
                 outputs[target].Select(static entry => entry.Value).ToArray(),
@@ -118,7 +121,7 @@ internal sealed class BuildGraphRenderingAdapter
             }
         }
 
-        return new BuildGraphRenderingAdapter(
+        return new BuildProgramRenderingAdapter(
             new OperationGraph(operations),
             labels,
             contents);

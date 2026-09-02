@@ -7,21 +7,23 @@ var assembly = new Value<string>();
 var prepare = new Target(
     inputs: [],
     outputs: [configuration],
-    operations: [new PrepareOperation(configuration)]);
+    body: new OperationGraph([new PrepareOperation(configuration)]));
 
 var compile = new Target(
+    prelude: [prepare],
     inputs: [configuration],
     outputs: [assembly],
-    operations: [new CompileOperation(configuration, assembly)]);
+    body: new OperationGraph([new CompileOperation(configuration, assembly)]),
+    epilogue: []);
 
 var report = new Target(
+    prelude: [compile],
     inputs: [],
     outputs: [],
-    operations: [new ReportOperation()]);
+    body: new OperationGraph([new ReportOperation()]),
+    epilogue: []);
 
-var graph = new BuildGraph(
-    [prepare, compile, report],
-    [new TargetDependency(compile, report)]);
+var program = new BuildProgram([prepare, compile, report]);
 
 var names = new Dictionary<Target, string>(
     ReferenceEqualityComparer.Instance)
@@ -31,7 +33,7 @@ var names = new Dictionary<Target, string>(
     [report] = "Report",
 };
 
-AsciiGraphWriter.Write(graph, Console.Out, names);
+AsciiGraphWriter.Write(program, Console.Out, names);
 
 sealed class PrepareOperation(Value<string> configuration) : Operation
 {

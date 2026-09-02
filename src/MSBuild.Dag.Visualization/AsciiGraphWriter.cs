@@ -32,32 +32,32 @@ public static class AsciiGraphWriter
             : outputIndex;
 
     public static string Render(
-        BuildGraph graph,
+        BuildProgram program,
         IReadOnlyDictionary<Target, string>? targetNames = null)
     {
-        ArgumentNullException.ThrowIfNull(graph);
+        ArgumentNullException.ThrowIfNull(program);
 
-        var adapter = BuildGraphRenderingAdapter.Create(
-            graph,
+        var adapter = BuildProgramRenderingAdapter.Create(
+            program,
             targetNames,
             includeTargetBodies: true);
         return Render(
             adapter.Graph,
-            "BuildGraph",
+            "BuildProgram",
             adapter.GetLabel,
             adapter.GetContent);
     }
 
     public static string RenderCompact(
-        BuildGraph graph,
+        BuildProgram program,
         IReadOnlyDictionary<Target, string>? targetNames = null)
     {
-        ArgumentNullException.ThrowIfNull(graph);
+        ArgumentNullException.ThrowIfNull(program);
 
-        var adapter = BuildGraphRenderingAdapter.Create(graph, targetNames);
+        var adapter = BuildProgramRenderingAdapter.Create(program, targetNames);
         return Render(
             adapter.Graph,
-            "BuildGraph",
+            "BuildProgram",
             adapter.GetLabel,
             contentProvider: null);
     }
@@ -73,37 +73,37 @@ public static class AsciiGraphWriter
     }
 
     public static void Write(
-        BuildGraph graph,
+        BuildProgram program,
         TextWriter writer,
         IReadOnlyDictionary<Target, string>? targetNames = null)
     {
-        ArgumentNullException.ThrowIfNull(graph);
+        ArgumentNullException.ThrowIfNull(program);
 
-        var adapter = BuildGraphRenderingAdapter.Create(
-            graph,
+        var adapter = BuildProgramRenderingAdapter.Create(
+            program,
             targetNames,
             includeTargetBodies: true);
         Write(
             adapter.Graph,
             writer,
-            "BuildGraph",
+            "BuildProgram",
             adapter.GetLabel,
             adapter.GetContent);
     }
 
     public static void WriteCompact(
-        BuildGraph graph,
+        BuildProgram program,
         TextWriter writer,
         IReadOnlyDictionary<Target, string>? targetNames = null)
     {
-        ArgumentNullException.ThrowIfNull(graph);
+        ArgumentNullException.ThrowIfNull(program);
         ArgumentNullException.ThrowIfNull(writer);
 
-        var adapter = BuildGraphRenderingAdapter.Create(graph, targetNames);
+        var adapter = BuildProgramRenderingAdapter.Create(program, targetNames);
         Write(
             adapter.Graph,
             writer,
-            "BuildGraph",
+            "BuildProgram",
             adapter.GetLabel,
             contentProvider: null);
     }

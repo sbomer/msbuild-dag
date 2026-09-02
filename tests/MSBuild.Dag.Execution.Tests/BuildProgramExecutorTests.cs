@@ -2,8 +2,126 @@ using MSBuild.Dag.Core;
 
 namespace MSBuild.Dag.Execution.Tests;
 
-public sealed class OperationGraphExecutorTests
+public sealed class BuildProgramExecutorTests
 {
+    [Fact]
+    public async Task ExecutesTargetPreludeBodyAndEpilogueInOrderOnce()
+    {
+        var executionOrder = new List<string>();
+        var shared = CreateTarget("Shared");
+        var first = new Target(
+            [shared],
+            [],
+            [],
+            Body("First"),
+            []);
+        var second = new Target(
+            [shared],
+            [],
+            [],
+            Body("Second"),
+            []);
+        var after = CreateTarget("After");
+        var requested = new Target(
+            [first, second],
+            [],
+            [],
+            Body("Requested"),
+            [after]);
+        var program = new BuildProgram(
+            [shared, first, second, requested, after]);
+        var executor = new BuildProgramExecutor(
+            program,
+            new ValueStore(),
+            (operation, _, _) =>
+            {
+                executionOrder.Add(((RecordingOperation)operation).Name);
+                return ValueTask.CompletedTask;
+            });
+
+        await executor.ExecuteAsync(requested);
+
+        Assert.Equal(
+            ["Shared", "First", "Second", "Requested", "After"],
+            executionOrder);
+
+        Target CreateTarget(string name) =>
+            new([], [], Body(name));
+
+        static OperationGraph Body(string name) =>
+            new([new RecordingOperation(name)]);
+    }
+
+    [Fact]
+    public async Task RejectsAfterTargetRequestedBeforeAnchor()
+    {
+        var after = new Target(
+            [],
+            [],
+            new OperationGraph([new RecordingOperation("After")]));
+        var anchor = new Target(
+            [],
+            [],
+            [],
+            new OperationGraph([new RecordingOperation("Anchor")]),
+            [after]);
+        var program = new BuildProgram([anchor, after]);
+        var executor = new BuildProgramExecutor(
+            program,
+            new ValueStore(),
+            static (_, _, _) => ValueTask.CompletedTask);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await executor.ExecuteAsync(after));
+
+        Assert.Contains("program order", exception.Message);
+    }
+
+    [Fact]
+    public async Task AcceptsRequestAfterGlobalPredecessorCompletes()
+    {
+        var executionOrder = new List<string>();
+        var a = CreateTarget("A");
+        var b = CreateTarget("B");
+        var build = new Target(
+            [a, b],
+            [],
+            [],
+            CreateBody("Build"),
+            []);
+        var bFirst = new Target(
+            [b],
+            [],
+            [],
+            CreateBody("BFirst"),
+            []);
+        var program = new BuildProgram([a, b, build, bFirst]);
+        var executor = new BuildProgramExecutor(
+            program,
+            new ValueStore(),
+            (operation, _, _) =>
+            {
+                executionOrder.Add(((RecordingOperation)operation).Name);
+                return ValueTask.CompletedTask;
+            });
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await executor.ExecuteAsync(bFirst));
+
+        Assert.Contains("program order", exception.Message);
+
+        await executor.ExecuteAsync(a);
+        await executor.ExecuteAsync(bFirst);
+
+        Assert.Equal(["A", "B", "BFirst"], executionOrder);
+
+        static Target CreateTarget(string name) =>
+            new([], [], CreateBody(name));
+
+        static OperationGraph CreateBody(string name) =>
+            new([new RecordingOperation(name)]);
+    }
+
     [Fact]
     public async Task ExecutesDependenciesBeforeConsumers()
     {
@@ -180,5 +298,14 @@ public sealed class OperationGraphExecutorTests
 
         public override IReadOnlyList<Value> Outputs =>
             [Result, OrderOutput!];
+    }
+
+    private sealed class RecordingOperation(string name) : Operation
+    {
+        public string Name { get; } = name;
+
+        public override IReadOnlyList<Value> Inputs => [];
+
+        public override IReadOnlyList<Value> Outputs => [];
     }
 }

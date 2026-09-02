@@ -1,0 +1,5 @@
+<Project>
+  <Target Name="Before"
+          BeforeTargets="Missing" />
+  <Target Name="Build" />
+</Project>

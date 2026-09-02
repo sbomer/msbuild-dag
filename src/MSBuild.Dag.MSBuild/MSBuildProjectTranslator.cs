@@ -30,10 +30,12 @@ public sealed class MSBuildProjectTranslator
         }
 
         var sourceTargets = projectInstance.Targets.Values.ToArray();
-        var dependencies = GetTargetDependencies(sourceTargets);
-        var translationOrder = GetTranslationOrder(sourceTargets, dependencies);
+        var links = GetTargetLinks(sourceTargets);
+        var translationOrder = GetTranslationOrder(
+            sourceTargets,
+            links.PrecedenceDependencies);
         var context = new TranslationContext(projectInstance);
-        var targets = new Dictionary<string, Target>(
+        var targetBodies = new Dictionary<string, TargetBody>(
             StringComparer.OrdinalIgnoreCase);
 
         foreach (var target in translationOrder)
@@ -70,26 +72,33 @@ public sealed class MSBuildProjectTranslator
 
             var operations = context.Operations.ToArray();
             var operationGraph = new OperationGraph(operations);
-            targets.Add(
+            targetBodies.Add(
                 target.Name,
-                new Target(
+                new TargetBody(
                     GetExternalInputs(operationGraph),
                     GetTargetOutputs(operationGraph, context),
-                    operations));
+                    operationGraph));
         }
 
-        var explicitDependencies = dependencies
-            .SelectMany(
-                pair => pair.Value.Select(
-                    prerequisite => new TargetDependency(
-                        targets[prerequisite.Name],
-                        targets[pair.Key.Name])))
-            .ToArray();
+        var createdTargets = new Dictionary<string, Target>(
+            StringComparer.OrdinalIgnoreCase);
+
+        foreach (var sourceTarget in sourceTargets)
+        {
+            CreateTarget(sourceTarget);
+        }
+
+        var targets = new Dictionary<string, Target>(
+            StringComparer.OrdinalIgnoreCase);
+
+        foreach (var sourceTarget in sourceTargets)
+        {
+            targets.Add(sourceTarget.Name, createdTargets[sourceTarget.Name]);
+        }
 
         return new TranslationResult(
-            new BuildGraph(
-                sourceTargets.Select(target => targets[target.Name]).ToArray(),
-                explicitDependencies),
+            new BuildProgram(
+                sourceTargets.Select(target => targets[target.Name]).ToArray()),
             targets,
             new Dictionary<string, Value<string>>(
                 context.Properties,
@@ -100,66 +109,219 @@ public sealed class MSBuildProjectTranslator
             new Dictionary<string, Value<bool>>(
                 context.TargetConditions,
                 StringComparer.OrdinalIgnoreCase));
+
+        Target CreateTarget(MSBuildTarget sourceTarget)
+        {
+            if (createdTargets.TryGetValue(sourceTarget.Name, out var existing))
+            {
+                return existing;
+            }
+
+            var body = targetBodies[sourceTarget.Name];
+            var target = new Target(
+                links.Preludes[sourceTarget]
+                    .Select(CreateTarget)
+                    .ToArray(),
+                body.Inputs,
+                body.Outputs,
+                body.Graph,
+                links.Epilogues[sourceTarget]
+                    .Select(CreateTarget)
+                    .ToArray());
+            createdTargets.Add(sourceTarget.Name, target);
+            return target;
+        }
     }
 
-    private static IReadOnlyDictionary<MSBuildTarget, IReadOnlyList<MSBuildTarget>>
-        GetTargetDependencies(IReadOnlyList<MSBuildTarget> targets)
+    private static TargetLinks GetTargetLinks(
+        IReadOnlyList<MSBuildTarget> targets)
     {
         var targetsByName = targets.ToDictionary(
             target => target.Name,
             StringComparer.OrdinalIgnoreCase);
-
-        var result = new Dictionary<MSBuildTarget, IReadOnlyList<MSBuildTarget>>(
+        var preludes = new Dictionary<MSBuildTarget, List<MSBuildTarget>>(
+            ReferenceEqualityComparer.Instance);
+        var epilogues = new Dictionary<MSBuildTarget, List<MSBuildTarget>>(
             ReferenceEqualityComparer.Instance);
 
         foreach (var target in targets)
         {
-            if (!string.IsNullOrWhiteSpace(target.BeforeTargets))
+            preludes.Add(
+                target,
+                ResolveTargetList(
+                    target,
+                    target.DependsOnTargets,
+                    nameof(target.DependsOnTargets),
+                    targetsByName));
+            epilogues.Add(target, []);
+        }
+
+        foreach (var target in targets)
+        {
+            foreach (var anchor in ResolveTargetList(
+                target,
+                target.BeforeTargets,
+                nameof(target.BeforeTargets),
+                targetsByName))
             {
-                throw Unsupported("BeforeTargets");
+                AddDistinct(preludes[anchor], target);
             }
 
-            if (!string.IsNullOrWhiteSpace(target.AfterTargets))
+            foreach (var anchor in ResolveTargetList(
+                target,
+                target.AfterTargets,
+                nameof(target.AfterTargets),
+                targetsByName))
             {
-                throw Unsupported("AfterTargets");
+                AddDistinct(epilogues[anchor], target);
             }
+        }
 
-            var dependencyExpression = target.DependsOnTargets;
+        EnsureOrchestrationAcyclic(targets, preludes, epilogues);
 
-            if (ContainsReference(dependencyExpression))
-            {
-                throw Unsupported(
-                    $"non-literal DependsOnTargets on target '{target.Name}'");
-            }
-
-            var targetDependencies = new List<MSBuildTarget>();
-            var seenDependencies = new HashSet<MSBuildTarget>(
+        var precedenceDependencies =
+            new Dictionary<MSBuildTarget, List<MSBuildTarget>>(
                 ReferenceEqualityComparer.Instance);
 
-            foreach (var dependencyName in dependencyExpression.Split(
-                ';',
-                StringSplitOptions.RemoveEmptyEntries |
-                StringSplitOptions.TrimEntries))
+        foreach (var target in targets)
+        {
+            precedenceDependencies.Add(target, []);
+        }
+
+        foreach (var target in targets)
+        {
+            AddPrecedenceSequence(preludes[target], target);
+            AddPrecedenceSequence([target, .. epilogues[target]], dependent: null);
+        }
+
+        return new TargetLinks(
+            CopyLists(preludes),
+            CopyLists(epilogues),
+            CopyLists(precedenceDependencies));
+
+        void AddPrecedenceSequence(
+            IReadOnlyList<MSBuildTarget> sequence,
+            MSBuildTarget? dependent)
+        {
+            MSBuildTarget? prerequisite = null;
+
+            foreach (var current in sequence)
             {
-                if (!targetsByName.TryGetValue(
-                    dependencyName,
-                    out var dependency))
+                if (prerequisite is not null)
                 {
-                    throw new InvalidOperationException(
-                        $"Target '{target.Name}' depends on missing target " +
-                        $"'{dependencyName}'.");
+                    AddDistinct(
+                        precedenceDependencies[current],
+                        prerequisite);
                 }
 
-                if (seenDependencies.Add(dependency))
-                {
-                    targetDependencies.Add(dependency);
-                }
+                prerequisite = current;
             }
 
-            result.Add(target, targetDependencies);
+            if (prerequisite is not null && dependent is not null)
+            {
+                AddDistinct(
+                    precedenceDependencies[dependent],
+                    prerequisite);
+            }
+        }
+    }
+
+    private static IReadOnlyDictionary<MSBuildTarget, IReadOnlyList<MSBuildTarget>>
+        CopyLists(
+            IReadOnlyDictionary<MSBuildTarget, List<MSBuildTarget>> source)
+    {
+        var result =
+            new Dictionary<MSBuildTarget, IReadOnlyList<MSBuildTarget>>(
+                ReferenceEqualityComparer.Instance);
+
+        foreach (var (target, targets) in source)
+        {
+            result.Add(target, targets.ToArray());
         }
 
         return result;
+    }
+
+    private static List<MSBuildTarget> ResolveTargetList(
+        MSBuildTarget declaringTarget,
+        string expression,
+        string attributeName,
+        IReadOnlyDictionary<string, MSBuildTarget> targetsByName)
+    {
+        if (ContainsReference(expression))
+        {
+            throw Unsupported(
+                $"non-literal {attributeName} on target " +
+                $"'{declaringTarget.Name}'");
+        }
+
+        var result = new List<MSBuildTarget>();
+
+        foreach (var targetName in expression.Split(
+            ';',
+            StringSplitOptions.RemoveEmptyEntries |
+            StringSplitOptions.TrimEntries))
+        {
+            if (!targetsByName.TryGetValue(targetName, out var target))
+            {
+                throw new InvalidOperationException(
+                    $"Target '{declaringTarget.Name}' references missing target " +
+                    $"'{targetName}' through {attributeName}.");
+            }
+
+            AddDistinct(result, target);
+        }
+
+        return result;
+    }
+
+    private static void AddDistinct(
+        List<MSBuildTarget> targets,
+        MSBuildTarget target)
+    {
+        if (!targets.Contains(target, ReferenceEqualityComparer.Instance))
+        {
+            targets.Add(target);
+        }
+    }
+
+    private static void EnsureOrchestrationAcyclic(
+        IReadOnlyList<MSBuildTarget> targets,
+        IReadOnlyDictionary<MSBuildTarget, List<MSBuildTarget>> preludes,
+        IReadOnlyDictionary<MSBuildTarget, List<MSBuildTarget>> epilogues)
+    {
+        var visiting = new HashSet<MSBuildTarget>(
+            ReferenceEqualityComparer.Instance);
+        var visited = new HashSet<MSBuildTarget>(
+            ReferenceEqualityComparer.Instance);
+
+        foreach (var target in targets)
+        {
+            Visit(target);
+        }
+
+        void Visit(MSBuildTarget target)
+        {
+            if (visited.Contains(target))
+            {
+                return;
+            }
+
+            if (!visiting.Add(target))
+            {
+                throw new InvalidOperationException(
+                    "Target orchestration must be acyclic.");
+            }
+
+            foreach (var referencedTarget in
+                preludes[target].Concat(epilogues[target]))
+            {
+                Visit(referencedTarget);
+            }
+
+            visiting.Remove(target);
+            visited.Add(target);
+        }
     }
 
     private static IReadOnlyList<MSBuildTarget> GetTranslationOrder(
@@ -357,6 +519,17 @@ public sealed class MSBuildProjectTranslator
 
     private static NotSupportedException Unsupported(string construct) =>
         new($"The restricted MSBuild translator does not support {construct}.");
+
+    private sealed record TargetBody(
+        IReadOnlyList<Value> Inputs,
+        IReadOnlyList<Value> Outputs,
+        OperationGraph Graph);
+
+    private sealed record TargetLinks(
+        IReadOnlyDictionary<MSBuildTarget, IReadOnlyList<MSBuildTarget>> Preludes,
+        IReadOnlyDictionary<MSBuildTarget, IReadOnlyList<MSBuildTarget>> Epilogues,
+        IReadOnlyDictionary<MSBuildTarget, IReadOnlyList<MSBuildTarget>>
+            PrecedenceDependencies);
 
     private sealed class TranslationContext(ProjectInstance project)
     {

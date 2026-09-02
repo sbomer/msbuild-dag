@@ -27,4 +27,11 @@
               PropertyName="AssemblyPath" />
     </ToyCompile>
   </Target>
+
+  <Target Name="AfterBuild"
+          AfterTargets="Build">
+    <PropertyGroup>
+      <AfterBuildRan>true</AfterBuildRan>
+    </PropertyGroup>
+  </Target>
 </Project>

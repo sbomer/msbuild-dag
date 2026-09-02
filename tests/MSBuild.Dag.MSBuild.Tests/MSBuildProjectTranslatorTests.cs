@@ -17,14 +17,24 @@ public sealed class MSBuildProjectTranslatorTests
         var prepare = result.Targets["Prepare"];
         var collectSources = result.Targets["CollectSources"];
         var build = result.Targets["Build"];
+        var afterBuild = result.Targets["AfterBuild"];
         var graph = build.Body;
 
-        Assert.Equal(3, result.Graph.Targets.Count);
-        Assert.Equal(2, result.Graph.GetDependencies(build).Count);
-        Assert.Contains(prepare, result.Graph.GetDependencies(build));
-        Assert.Contains(collectSources, result.Graph.GetDependencies(build));
-        Assert.Empty(result.Graph.GetDependencies(prepare));
-        Assert.Empty(result.Graph.GetDependencies(collectSources));
+        Assert.Equal(4, result.Program.Targets.Count);
+        Assert.Equal([prepare, collectSources], build.Prelude);
+        Assert.Equal([afterBuild], build.Epilogue);
+        Assert.Empty(afterBuild.Prelude);
+        Assert.Empty(afterBuild.Epilogue);
+        Assert.Equal(2, result.Program.GetPredecessors(build).Count);
+        Assert.Contains(prepare, result.Program.GetPredecessors(build));
+        Assert.Contains(collectSources, result.Program.GetPredecessors(build));
+        Assert.Empty(result.Program.GetPredecessors(prepare));
+        Assert.Equal(
+            [prepare],
+            result.Program.GetPredecessors(collectSources));
+        Assert.Equal(
+            [build],
+            result.Program.GetPredecessors(afterBuild));
 
         var compile = Assert.Single(graph.Operations.OfType<ToyCompileOperation>());
         var configuration = Assert.Single(
@@ -37,6 +47,12 @@ public sealed class MSBuildProjectTranslatorTests
         Assert.Same(compile.Assembly, result.Properties["AssemblyPath"]);
         Assert.Same(concat.Result, result.Items["Compile"]);
         Assert.Same(configuration.Result, result.Properties["Configuration"]);
+        Assert.Contains(
+            afterBuild.Body.Operations.OfType<ConstantOperation<string>>(),
+            operation => operation.Content == "true" &&
+                ReferenceEquals(
+                    operation.Result,
+                    result.Properties["AfterBuildRan"]));
         Assert.Same(configuration.Result, compile.Configuration);
         Assert.Contains(configuration.Result, prepare.Outputs);
         Assert.Contains(configuration.Result, build.Inputs);
@@ -76,10 +92,32 @@ public sealed class MSBuildProjectTranslatorTests
             projectPath,
             "Prepare");
 
-        Assert.Equal(3, result.Graph.Targets.Count);
+        Assert.Equal(4, result.Program.Targets.Count);
         Assert.Equal(
-            ["Prepare", "CollectSources", "Build"],
+            ["Prepare", "CollectSources", "Build", "AfterBuild"],
             result.Targets.Keys);
+    }
+
+    [Fact]
+    public void LinksDependsBeforeAndAfterTargetsInStableOrder()
+    {
+        var result = TranslateAsset("Orchestration.proj", "Build");
+        var build = result.Targets["Build"];
+
+        Assert.Equal(
+            [
+                result.Targets["DependencyOne"],
+                result.Targets["DependencyTwo"],
+                result.Targets["BeforeOne"],
+                result.Targets["BeforeTwo"],
+            ],
+            build.Prelude);
+        Assert.Equal(
+            [
+                result.Targets["AfterOne"],
+                result.Targets["AfterTwo"],
+            ],
+            build.Epilogue);
     }
 
     [Fact]
@@ -108,6 +146,50 @@ public sealed class MSBuildProjectTranslatorTests
             () => new MSBuildProjectTranslator().Translate(projectPath, "Build"));
 
         Assert.Contains("non-literal DependsOnTargets", exception.Message);
+    }
+
+    [Theory]
+    [InlineData("DynamicBefore.proj", "BeforeTargets")]
+    [InlineData("DynamicAfter.proj", "AfterTargets")]
+    public void RejectsNonLiteralTargetRegistrations(
+        string assetName,
+        string attributeName)
+    {
+        var exception = Assert.Throws<NotSupportedException>(
+            () => TranslateAsset(assetName, "Build"));
+
+        Assert.Contains($"non-literal {attributeName}", exception.Message);
+    }
+
+    [Theory]
+    [InlineData("MissingTarget.proj")]
+    [InlineData("MissingBeforeTarget.proj")]
+    [InlineData("MissingAfterTarget.proj")]
+    public void RejectsMissingNamedTarget(string assetName)
+    {
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => TranslateAsset(assetName, "Build"));
+
+        Assert.Contains("missing target 'Missing'", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsOrchestrationCycles()
+    {
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => TranslateAsset("OrchestrationCycle.proj", "First"));
+
+        Assert.Contains("orchestration", exception.Message);
+        Assert.Contains("acyclic", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsConflictingGlobalOrderFromAfterTargets()
+    {
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => TranslateAsset("ConflictingAfterOrder.proj", "Build"));
+
+        Assert.Contains("acyclic", exception.Message);
     }
 
     [Fact]
@@ -200,4 +282,16 @@ public sealed class MSBuildProjectTranslatorTests
                     values.Set(operation.Assembly, "App.dll");
                     return ValueTask.CompletedTask;
                 });
+
+    private static TranslationResult TranslateAsset(
+        string assetName,
+        string targetName)
+    {
+        var projectPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "TestAssets",
+            assetName);
+
+        return new MSBuildProjectTranslator().Translate(projectPath, targetName);
+    }
 }

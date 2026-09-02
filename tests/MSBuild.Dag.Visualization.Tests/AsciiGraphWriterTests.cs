@@ -81,12 +81,21 @@ public sealed class AsciiGraphWriterTests
         var data = new Value<string>();
         var producer = new TestOperation([], [data]);
         var consumer = new TestOperation([data], []);
-        var first = new Target([], [data], [producer]);
-        var second = new Target([data], [], [consumer]);
-        var third = new Target([], [], []);
-        var graph = new BuildGraph(
-            [first, second, third],
-            [new TargetDependency(second, third)]);
+        var first = new Target(
+            [],
+            [data],
+            new OperationGraph([producer]));
+        var second = new Target(
+            [data],
+            [],
+            new OperationGraph([consumer]));
+        var third = new Target(
+            [second],
+            [],
+            [],
+            new OperationGraph([]),
+            []);
+        var program = new BuildProgram([first, second, third]);
         var names = new Dictionary<Target, string>(
             ReferenceEqualityComparer.Instance)
         {
@@ -95,9 +104,9 @@ public sealed class AsciiGraphWriterTests
             [third] = "Report",
         };
 
-        var result = AsciiGraphWriter.RenderCompact(graph, names);
+        var result = AsciiGraphWriter.RenderCompact(program, names);
 
-        Assert.StartsWith($"BuildGraph{Environment.NewLine}", result);
+        Assert.StartsWith($"BuildProgram{Environment.NewLine}", result);
         Assert.Contains("[0] Prepare", result);
         Assert.Contains("[1] Compile", result);
         Assert.Contains("[2] Report", result);
@@ -107,14 +116,58 @@ public sealed class AsciiGraphWriterTests
     }
 
     [Fact]
-    public void ExpandedBuildGraphIncludesTargetBodies()
+    public void RendersDifferentPreludeOrdersDifferently()
+    {
+        var first = EmptyTarget();
+        var second = EmptyTarget();
+        var firstThenSecond = new Target(
+            [first, second],
+            [],
+            [],
+            new OperationGraph([]),
+            []);
+        var secondThenFirst = new Target(
+            [second, first],
+            [],
+            [],
+            new OperationGraph([]),
+            []);
+        var names = new Dictionary<Target, string>(
+            ReferenceEqualityComparer.Instance)
+        {
+            [first] = "A",
+            [second] = "B",
+            [firstThenSecond] = "Build",
+            [secondThenFirst] = "Build",
+        };
+
+        var forward = AsciiGraphWriter.RenderCompact(
+            new BuildProgram([first, second, firstThenSecond]),
+            names);
+        var reverse = AsciiGraphWriter.RenderCompact(
+            new BuildProgram([first, second, secondThenFirst]),
+            names);
+
+        Assert.NotEqual(forward, reverse);
+        Assert.Contains("order", forward);
+        Assert.Contains("order", reverse);
+    }
+
+    [Fact]
+    public void ExpandedBuildProgramIncludesTargetBodies()
     {
         var data = new Value<string>();
         var producer = new TestOperation([], [data]);
         var consumer = new TestOperation([data], []);
-        var first = new Target([], [data], [producer]);
-        var second = new Target([data], [], [consumer]);
-        var graph = new BuildGraph([first, second]);
+        var first = new Target(
+            [],
+            [data],
+            new OperationGraph([producer]));
+        var second = new Target(
+            [data],
+            [],
+            new OperationGraph([consumer]));
+        var program = new BuildProgram([first, second]);
         var names = new Dictionary<Target, string>(
             ReferenceEqualityComparer.Instance)
         {
@@ -122,9 +175,9 @@ public sealed class AsciiGraphWriterTests
             [second] = "Compile",
         };
 
-        var result = AsciiGraphWriter.Render(graph, names);
+        var result = AsciiGraphWriter.Render(program, names);
 
-        Assert.Contains("BuildGraph", result);
+        Assert.Contains("BuildProgram", result);
         Assert.Contains("[0] Prepare", result);
         Assert.Contains("[1] Compile", result);
         Assert.Equal(2, CountOccurrences(result, "TestOperation"));
@@ -136,48 +189,49 @@ public sealed class AsciiGraphWriterTests
     }
 
     [Fact]
-    public void ExpandedBuildGraphRendersEmptyTargetBody()
+    public void ExpandedBuildProgramRendersEmptyTargetBody()
     {
-        var target = new Target([], [], []);
-        var graph = new BuildGraph([target]);
+        var target = EmptyTarget();
+        var program = new BuildProgram([target]);
 
-        var result = AsciiGraphWriter.Render(graph);
+        var result = AsciiGraphWriter.Render(program);
 
         Assert.Contains("[0] Target 0", result);
         Assert.Contains("(empty)", result);
     }
 
     [Fact]
-    public void ExpandedBuildGraphKeepsBoundaryLabelsClearOfOrderEdges()
+    public void ExpandedBuildProgramKeepsBoundaryLabelsClearOfOrderEdges()
     {
         var firstValue = new Value<string>();
         var secondValue = new Value<string>();
         var first = new Target(
             [],
             [firstValue],
-            [new TestOperation([], [firstValue])]);
+            new OperationGraph([new TestOperation([], [firstValue])]));
         var second = new Target(
             [],
             [secondValue],
-            [new TestOperation([], [secondValue])]);
+            new OperationGraph([new TestOperation([], [secondValue])]));
         var consumer = new Target(
+            [first, second],
             [firstValue, secondValue],
             [],
-            [new TestOperation([firstValue, secondValue], [])]);
-        var graph = new BuildGraph(
-            [first, second, consumer],
-            [
-                new TargetDependency(first, consumer),
-                new TargetDependency(second, consumer),
-            ]);
+            new OperationGraph(
+                [new TestOperation([firstValue, secondValue], [])]),
+            []);
+        var program = new BuildProgram([first, second, consumer]);
 
-        var result = AsciiGraphWriter.Render(graph);
+        var result = AsciiGraphWriter.Render(program);
 
         Assert.Equal(2, CountOccurrences(result, "i0"));
         Assert.Equal(2, CountOccurrences(result, "i1"));
         Assert.DoesNotContain("i0▼", result);
         Assert.DoesNotContain("i1▼", result);
     }
+
+    private static Target EmptyTarget() =>
+        new([], [], new OperationGraph([]));
 
     private static int CountOccurrences(string value, string search)
     {

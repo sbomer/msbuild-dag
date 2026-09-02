@@ -1,0 +1,9 @@
+<Project>
+  <PropertyGroup>
+    <Anchor>Build</Anchor>
+  </PropertyGroup>
+
+  <Target Name="Before"
+          BeforeTargets="$(Anchor)" />
+  <Target Name="Build" />
+</Project>
