@@ -1,0 +1,13 @@
+<Project>
+  <PropertyGroup>
+    <X>OldX</X>
+    <Y>OldY</Y>
+  </PropertyGroup>
+
+  <Target Name="Build">
+    <PropertyGroup Condition="'$(X)' == ''">
+      <X>A</X>
+      <Y>B</Y>
+    </PropertyGroup>
+  </Target>
+</Project>

@@ -140,6 +140,11 @@ internal static class CliRunner
             return "?:";
         }
 
+        if (operation is ConditionalRegionOperation)
+        {
+            return "if";
+        }
+
         if (operation is IStateBindingOperation)
         {
             return "state read";

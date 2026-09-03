@@ -506,13 +506,23 @@ public sealed class MSBuildProjectTranslator
             switch (child)
             {
                 case ProjectPropertyGroupTaskInstance propertyGroup:
+                    if (!string.IsNullOrWhiteSpace(propertyGroup.Condition))
+                    {
+                        AddConditionRead(propertyGroup.Condition);
+                    }
+
                     foreach (var property in propertyGroup.Properties)
                     {
                         AddPropertyExpressionRead(property.Value);
 
-                        if (!string.IsNullOrWhiteSpace(property.Condition))
+                        if (!string.IsNullOrWhiteSpace(propertyGroup.Condition) ||
+                            !string.IsNullOrWhiteSpace(property.Condition))
                         {
                             AddPropertyRead(property.Name);
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(property.Condition))
+                        {
                             AddConditionRead(property.Condition);
                         }
 
@@ -836,7 +846,8 @@ public sealed class MSBuildProjectTranslator
     {
         if (!string.IsNullOrWhiteSpace(propertyGroup.Condition))
         {
-            throw Unsupported("PropertyGroup conditions");
+            TranslateConditionalPropertyGroup(propertyGroup, context);
+            return;
         }
 
         foreach (var property in propertyGroup.Properties)
@@ -852,12 +863,95 @@ public sealed class MSBuildProjectTranslator
             var condition = context.TranslateCondition(property.Condition);
             var assignedValue =
                 context.ResolvePropertyExpression(property.Value);
-            var select = new SelectOperation<string>(
+            var thenAssigned = new Value<string>();
+            var thenPrevious = new Value<string>();
+            var elseAssigned = new Value<string>();
+            var elsePrevious = new Value<string>();
+            var result = new Value<string>();
+            var conditional = new ConditionalRegionOperation(
                 condition,
-                assignedValue,
-                previousValue);
-            context.AddOperation(select, ordered: false);
-            context.Properties[property.Name] = select.Result;
+                [assignedValue, previousValue],
+                new OperationGraph(
+                    [thenAssigned, thenPrevious],
+                    [],
+                    [thenAssigned]),
+                new OperationGraph(
+                    [elseAssigned, elsePrevious],
+                    [],
+                    [elsePrevious]),
+                [result]);
+            context.AddOperation(conditional, ordered: false);
+            context.Properties[property.Name] = result;
+        }
+    }
+
+    private static void TranslateConditionalPropertyGroup(
+        ProjectPropertyGroupTaskInstance propertyGroup,
+        TranslationContext context)
+    {
+        if (propertyGroup.Properties.Any(
+            property => !string.IsNullOrWhiteSpace(property.Condition)))
+        {
+            throw Unsupported(
+                "property conditions inside a conditioned PropertyGroup");
+        }
+
+        if (propertyGroup.Properties.Any(
+            property => ContainsReference(property.Value)))
+        {
+            throw Unsupported(
+                "property references inside a conditioned PropertyGroup");
+        }
+
+        var condition = context.TranslateCondition(propertyGroup.Condition);
+        var inputs = new List<Value>();
+        var whenTrueInputs = new List<Value>();
+        var whenFalseInputs = new List<Value>();
+        var whenTrueOutputs = new List<Value>();
+        var whenFalseOutputs = new List<Value>();
+        var outputs = new List<Value>();
+        var properties = new List<(string Name, Value<string> Result)>();
+
+        foreach (var property in propertyGroup.Properties)
+        {
+            var assignedValue =
+                context.ResolvePropertyExpression(property.Value);
+            var previousValue = context.GetProperty(property.Name);
+            var whenTrueAssigned = new Value<string>();
+            var whenTruePrevious = new Value<string>();
+            var whenFalseAssigned = new Value<string>();
+            var whenFalsePrevious = new Value<string>();
+            var result = new Value<string>();
+
+            inputs.Add(assignedValue);
+            inputs.Add(previousValue);
+            whenTrueInputs.Add(whenTrueAssigned);
+            whenTrueInputs.Add(whenTruePrevious);
+            whenFalseInputs.Add(whenFalseAssigned);
+            whenFalseInputs.Add(whenFalsePrevious);
+            whenTrueOutputs.Add(whenTrueAssigned);
+            whenFalseOutputs.Add(whenFalsePrevious);
+            outputs.Add(result);
+            properties.Add((property.Name, result));
+        }
+
+        var conditional = new ConditionalRegionOperation(
+            condition,
+            inputs,
+            new OperationGraph(
+                whenTrueInputs,
+                [],
+                whenTrueOutputs),
+            new OperationGraph(
+                whenFalseInputs,
+                [],
+                whenFalseOutputs),
+            outputs);
+        context.AddOperation(conditional, ordered: false);
+
+        foreach (var property in properties)
+        {
+            context.Properties[property.Name] = property.Result;
         }
     }
 

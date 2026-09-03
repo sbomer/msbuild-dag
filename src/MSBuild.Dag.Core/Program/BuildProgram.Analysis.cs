@@ -61,7 +61,7 @@ public sealed partial class BuildProgram
                 throw new ArgumentException("A target cannot appear more than once.", nameof(Targets));
             }
 
-            foreach (var operation in target.Body.Operations)
+            foreach (var operation in GetOperations(target.Body))
             {
                 if (!operationOwners.TryAdd(operation, target))
                 {
@@ -83,6 +83,27 @@ public sealed partial class BuildProgram
         }
 
         return operationOwners;
+
+        static IEnumerable<Operation> GetOperations(OperationGraph graph)
+        {
+            foreach (var operation in graph.Operations)
+            {
+                yield return operation;
+
+                if (operation is ConditionalRegionOperation conditional)
+                {
+                    foreach (var nested in GetOperations(conditional.WhenTrue))
+                    {
+                        yield return nested;
+                    }
+
+                    foreach (var nested in GetOperations(conditional.WhenFalse))
+                    {
+                        yield return nested;
+                    }
+                }
+            }
+        }
     }
 
     private void ValidateInitialValues(

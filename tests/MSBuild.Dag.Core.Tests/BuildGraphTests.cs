@@ -47,6 +47,121 @@ public sealed class OperationGraphTests
     }
 
     [Fact]
+    public void SignedGraphAllowsInputToPassThroughAsOutput()
+    {
+        var value = new Value<string>();
+
+        var graph = new OperationGraph([value], [], [value]);
+
+        Assert.Equal([value], graph.Inputs);
+        Assert.Equal([value], graph.Outputs);
+    }
+
+    [Fact]
+    public void ConditionalRegionRequiresMatchingBranchSignatures()
+    {
+        var condition = new Value<bool>();
+        var argument = new Value<string>();
+        var result = new Value<string>();
+        var whenTrueInput = new Value<string>();
+        var whenFalseInput = new Value<int>();
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => new ConditionalRegionOperation(
+                condition,
+                [argument],
+                new OperationGraph(
+                    [whenTrueInput],
+                    [],
+                    [whenTrueInput]),
+                new OperationGraph(
+                    [whenFalseInput],
+                    [],
+                    [whenFalseInput]),
+                [result]));
+
+        Assert.Contains("input types", exception.Message);
+    }
+
+    [Fact]
+    public void ConditionalRegionRejectsInferredBranchBoundaries()
+    {
+        var condition = new Value<bool>();
+        var argument = new Value<string>();
+        var result = new Value<string>();
+        var whenTrueInput = new Value<string>();
+        var whenFalseInput = new Value<string>();
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => new ConditionalRegionOperation(
+                condition,
+                [argument],
+                new OperationGraph([]),
+                new OperationGraph(
+                    [whenFalseInput],
+                    [],
+                    [whenFalseInput]),
+                [result]));
+
+        Assert.Contains("explicit", exception.Message);
+    }
+
+    [Fact]
+    public void OperationGraphRejectsConditionalBranchValueAliasing()
+    {
+        var condition = new Value<bool>();
+        var argument = new Value<string>();
+        var branchInput = new Value<string>();
+        var falseInput = new Value<string>();
+        var result = new Value<string>();
+        var conditional = new ConditionalRegionOperation(
+            condition,
+            [argument],
+            new OperationGraph(
+                [branchInput],
+                [],
+                [branchInput]),
+            new OperationGraph(
+                [falseInput],
+                [],
+                [falseInput]),
+            [result]);
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => new OperationGraph(
+                [condition, argument, branchInput],
+                [conditional],
+                [result]));
+
+        Assert.Contains("local to one branch", exception.Message);
+    }
+
+    [Fact]
+    public void ConditionalRegionRejectsBranchValueAsResult()
+    {
+        var condition = new Value<bool>();
+        var argument = new Value<string>();
+        var whenTrueInput = new Value<string>();
+        var whenFalseInput = new Value<string>();
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => new ConditionalRegionOperation(
+                condition,
+                [argument],
+                new OperationGraph(
+                    [whenTrueInput],
+                    [],
+                    [whenTrueInput]),
+                new OperationGraph(
+                    [whenFalseInput],
+                    [],
+                    [whenFalseInput]),
+                [whenTrueInput]));
+
+        Assert.Contains("must not be local", exception.Message);
+    }
+
+    [Fact]
     public void RejectsMultipleProducersForOneValue()
     {
         var sharedOutput = new Value();

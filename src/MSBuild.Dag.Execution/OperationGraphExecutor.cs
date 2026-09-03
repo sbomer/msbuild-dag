@@ -14,11 +14,29 @@ public sealed class OperationGraphExecutor
         ArgumentNullException.ThrowIfNull(values);
         ArgumentNullException.ThrowIfNull(executeOperation);
 
+        foreach (var input in graph.Inputs)
+        {
+            if (!values.Contains(input))
+            {
+                throw new InvalidOperationException(
+                    "An operation-graph input has not been assigned.");
+            }
+        }
+
         var completed = new HashSet<Operation>(ReferenceEqualityComparer.Instance);
 
         foreach (var operation in graph.Operations)
         {
             await ExecuteAsync(operation);
+        }
+
+        foreach (var output in graph.Outputs)
+        {
+            if (!values.Contains(output))
+            {
+                throw new InvalidOperationException(
+                    "An operation-graph output has not been assigned.");
+            }
         }
 
         async ValueTask ExecuteAsync(Operation operation)
@@ -76,6 +94,10 @@ public sealed class OperationGraphExecutor
                         : select.WhenFalse,
                     select.Result);
             }
+            else if (operation is ConditionalRegionOperation conditional)
+            {
+                await ExecuteConditionalAsync(conditional);
+            }
             else
             {
                 await executeOperation(operation, values, cancellationToken);
@@ -103,6 +125,34 @@ public sealed class OperationGraphExecutor
             }
 
             completed.Add(operation);
+        }
+
+        async ValueTask ExecuteConditionalAsync(
+            ConditionalRegionOperation conditional)
+        {
+            var branch = values.Get(conditional.Condition)
+                ? conditional.WhenTrue
+                : conditional.WhenFalse;
+
+            for (var index = 0; index < branch.Inputs.Count; index++)
+            {
+                values.Copy(
+                    conditional.Inputs[index + 1],
+                    branch.Inputs[index]);
+            }
+
+            await new OperationGraphExecutor().ExecuteAsync(
+                branch,
+                values,
+                executeOperation,
+                cancellationToken);
+
+            for (var index = 0; index < conditional.Outputs.Count; index++)
+            {
+                values.Copy(
+                    branch.Outputs[index],
+                    conditional.Outputs[index]);
+            }
         }
     }
 }

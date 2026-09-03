@@ -105,4 +105,173 @@ public sealed partial class OperationGraph
         visiting.Remove(operation);
         visited.Add(operation);
     }
+
+    private Value[] GetExternalInputs()
+    {
+        var result = new List<Value>();
+        var seen = new HashSet<Value>(ReferenceEqualityComparer.Instance);
+
+        foreach (var operation in Operations)
+        {
+            foreach (var input in operation.Inputs)
+            {
+                if (!_producers.ContainsKey(input) && seen.Add(input))
+                {
+                    result.Add(input);
+                }
+            }
+        }
+
+        return result.ToArray();
+    }
+
+    private Value[] GetUnconsumedOutputs()
+    {
+        var consumed = new HashSet<Value>(
+            Operations.SelectMany(operation => operation.Inputs),
+            ReferenceEqualityComparer.Instance);
+
+        return Operations
+            .SelectMany(operation => operation.Outputs)
+            .Where(output => !consumed.Contains(output))
+            .ToArray();
+    }
+
+    private static Value[] CopyBoundary(
+        IReadOnlyList<Value> values,
+        string parameterName)
+    {
+        var result = values.ToArray();
+        var seen = new HashSet<Value>(ReferenceEqualityComparer.Instance);
+
+        foreach (var value in result)
+        {
+            ArgumentNullException.ThrowIfNull(value, parameterName);
+
+            if (!seen.Add(value))
+            {
+                throw new ArgumentException(
+                    "An operation-graph boundary cannot contain the same value more than once.",
+                    parameterName);
+            }
+        }
+
+        return result;
+    }
+
+    private void ValidateBoundary()
+    {
+        var inputs = new HashSet<Value>(
+            Inputs,
+            ReferenceEqualityComparer.Instance);
+
+        foreach (var input in Inputs)
+        {
+            if (_producers.ContainsKey(input))
+            {
+                throw new ArgumentException(
+                    "An operation-graph input cannot be produced inside the graph.",
+                    nameof(Inputs));
+            }
+        }
+
+        foreach (var operation in Operations)
+        {
+            foreach (var input in operation.Inputs)
+            {
+                if (!_producers.ContainsKey(input) && !inputs.Contains(input))
+                {
+                    throw new ArgumentException(
+                        "Every external operation input must be declared as an operation-graph input.",
+                        nameof(Inputs));
+                }
+            }
+        }
+
+        foreach (var output in Outputs)
+        {
+            if (!_producers.ContainsKey(output) && !inputs.Contains(output))
+            {
+                throw new ArgumentException(
+                    "An operation-graph output must be an input or be produced inside the graph.",
+                    nameof(Outputs));
+            }
+        }
+    }
+
+    private void ValidateNestedScopes()
+    {
+        var operations = new HashSet<Operation>(
+            ReferenceEqualityComparer.Instance);
+        RegisterOperationTree(this, operations);
+
+        ValidateGraph(this);
+
+        static void ValidateGraph(OperationGraph graph)
+        {
+            var localValues = new HashSet<Value>(
+                graph.Inputs,
+                ReferenceEqualityComparer.Instance);
+            localValues.UnionWith(
+                graph.Operations.SelectMany(operation => operation.Outputs));
+
+            foreach (var conditional in
+                graph.Operations.OfType<ConditionalRegionOperation>())
+            {
+                var whenTrueValues = GetScopedValues(conditional.WhenTrue);
+                var whenFalseValues = GetScopedValues(conditional.WhenFalse);
+
+                if (whenTrueValues.Overlaps(localValues) ||
+                    whenFalseValues.Overlaps(localValues) ||
+                    whenTrueValues.Overlaps(whenFalseValues))
+                {
+                    throw new ArgumentException(
+                        "Conditional branch values must be local to one branch.",
+                        nameof(Operations));
+                }
+
+                ValidateGraph(conditional.WhenTrue);
+                ValidateGraph(conditional.WhenFalse);
+            }
+        }
+
+        static HashSet<Value> GetScopedValues(OperationGraph graph)
+        {
+            var result = new HashSet<Value>(
+                graph.Inputs,
+                ReferenceEqualityComparer.Instance);
+            result.UnionWith(
+                graph.Operations.SelectMany(operation => operation.Outputs));
+
+            foreach (var conditional in
+                graph.Operations.OfType<ConditionalRegionOperation>())
+            {
+                result.UnionWith(GetScopedValues(conditional.WhenTrue));
+                result.UnionWith(GetScopedValues(conditional.WhenFalse));
+            }
+
+            return result;
+        }
+
+        static void RegisterOperationTree(
+            OperationGraph graph,
+            HashSet<Operation> operations)
+        {
+            foreach (var operation in graph.Operations)
+            {
+                if (!operations.Add(operation))
+                {
+                    throw new ArgumentException(
+                        "An operation cannot appear in more than one graph scope.",
+                        nameof(Operations));
+                }
+
+                if (operation is ConditionalRegionOperation conditional)
+                {
+                    RegisterOperationTree(conditional.WhenTrue, operations);
+                    RegisterOperationTree(conditional.WhenFalse, operations);
+                }
+            }
+        }
+    }
 }

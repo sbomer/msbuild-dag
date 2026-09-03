@@ -29,40 +29,4 @@ public sealed partial class Target
 
         return result;
     }
-
-    private void ValidateBoundary()
-    {
-        foreach (var input in Inputs)
-        {
-            if (Body.GetProducer(input) is not null)
-            {
-                throw new ArgumentException(
-                    "A target input cannot be produced inside the target.",
-                    nameof(Inputs));
-            }
-        }
-
-        foreach (var output in Outputs)
-        {
-            if (Body.GetProducer(output) is null)
-            {
-                throw new ArgumentException(
-                    "A target output must be produced inside the target.",
-                    nameof(Outputs));
-            }
-        }
-
-        foreach (var operation in Body.Operations)
-        {
-            foreach (var input in operation.Inputs)
-            {
-                if (Body.GetProducer(input) is null && !_inputs.Contains(input))
-                {
-                    throw new ArgumentException(
-                        "Every external operation input must be declared as a target input.",
-                        nameof(Inputs));
-                }
-            }
-        }
-    }
 }

@@ -94,9 +94,10 @@ public sealed partial class BuildDefinition
                 definition.Writes.Select(write => write.Value));
             var target = new Target(
                 definition.Prelude.Select(CreateTarget).ToArray(),
-                linkedBody.Inputs,
-                outputs.ToArray(),
-                linkedBody.Graph,
+                new OperationGraph(
+                    linkedBody.Inputs,
+                    linkedBody.Graph.Operations,
+                    outputs.ToArray()),
                 definition.Epilogue.Select(CreateTarget).ToArray());
             linkedTargets.Add(definition, target);
             return target;

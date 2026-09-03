@@ -40,33 +40,41 @@ internal sealed class TargetBodyRenderingAdapter
 
     public static TargetBodyRenderingAdapter Create(
         Target target,
-        Func<Operation, string?>? labelProvider)
+        Func<Operation, string?>? labelProvider) =>
+        Create(target.Body, labelProvider, labelBoundaries: false);
+
+    public static TargetBodyRenderingAdapter Create(
+        OperationGraph graph,
+        Func<Operation, string?>? labelProvider,
+        bool labelBoundaries)
     {
         var operations = new List<Operation>(
-            target.Inputs.Count +
-            target.Body.Operations.Count +
-            target.Outputs.Count);
+            graph.Inputs.Count +
+            graph.Operations.Count +
+            graph.Outputs.Count);
         var labels = new Dictionary<Operation, string>(
             ReferenceEqualityComparer.Instance);
-        var inputs = new List<Operation>(target.Inputs.Count);
-        var outputs = new List<Operation>(target.Outputs.Count);
+        var inputs = new List<Operation>(graph.Inputs.Count);
+        var outputs = new List<Operation>(graph.Outputs.Count);
 
-        for (var index = 0; index < target.Inputs.Count; index++)
+        for (var index = 0; index < graph.Inputs.Count; index++)
         {
-            var input = new TargetInputBoundaryOperation(target.Inputs[index]);
+            var input = new TargetInputBoundaryOperation(graph.Inputs[index]);
             operations.Add(input);
             inputs.Add(input);
-            labels.Add(input, string.Empty);
+            labels.Add(input, labelBoundaries ? $"i{index}" : string.Empty);
         }
 
-        operations.AddRange(target.Body.Operations);
+        operations.AddRange(graph.Operations);
 
-        for (var index = 0; index < target.Outputs.Count; index++)
+        for (var index = 0; index < graph.Outputs.Count; index++)
         {
-            var output = new TargetOutputBoundaryOperation(target.Outputs[index]);
+            var output = new TargetOutputBoundaryOperation(graph.Outputs[index]);
             operations.Add(output);
             outputs.Add(output);
-            labels.Add(output, string.Empty);
+            labels.Add(
+                output,
+                labelBoundaries ? $"o{index}" : string.Empty);
         }
 
         return new TargetBodyRenderingAdapter(

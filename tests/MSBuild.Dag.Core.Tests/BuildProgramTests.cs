@@ -24,6 +24,23 @@ public sealed class BuildProgramTests
     }
 
     [Fact]
+    public void TargetUsesItsBodySignature()
+    {
+        var input = new Value<string>();
+        var output = new Value<string>();
+        var operation = new TestOperation([input], [output]);
+        var body = new OperationGraph(
+            [input],
+            [operation],
+            [output]);
+
+        var target = new Target(body);
+
+        Assert.Same(body.Inputs, target.Inputs);
+        Assert.Same(body.Outputs, target.Outputs);
+    }
+
+    [Fact]
     public void IncludesExplicitOrderDependencies()
     {
         var dependency = EmptyTarget();
@@ -88,7 +105,7 @@ public sealed class BuildProgramTests
         var exception = Assert.Throws<ArgumentException>(
             () => new Target([], [], new OperationGraph([operation])));
 
-        Assert.Contains("target input", exception.Message);
+        Assert.Contains("operation-graph input", exception.Message);
     }
 
     [Fact]
@@ -98,6 +115,18 @@ public sealed class BuildProgramTests
 
         var exception = Assert.Throws<ArgumentException>(
             () => new Target([], [output], new OperationGraph([])));
+
+        Assert.Contains("produced inside", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsTargetPassingInputThroughAsOutput()
+    {
+        var value = new Value<string>();
+        var body = new OperationGraph([value], [], [value]);
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => new Target(body));
 
         Assert.Contains("produced inside", exception.Message);
     }

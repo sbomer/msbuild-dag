@@ -1,7 +1,8 @@
 <Project>
     <Target Name="Build">
-        <PropertyGroup>
-            <Key Condition="'$(Key)' == ''">DefaultValue</Key>
+        <PropertyGroup Condition="'$(X)' == ''">
+            <X>A</X>
+            <Y>B</Y>
         </PropertyGroup>
     </Target>
 </Project>

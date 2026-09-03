@@ -147,9 +147,20 @@ public static class AsciiGraphWriter
 
     internal static GraphNodeContent RenderTargetBody(
         Target target,
-        Func<Operation, string?>? operationLabelProvider)
+        Func<Operation, string?>? operationLabelProvider) =>
+        RenderSignedGraph(
+            target.Body,
+            operationLabelProvider,
+            labelBoundaries: false);
+
+    private static GraphNodeContent RenderSignedGraph(
+        OperationGraph graph,
+        Func<Operation, string?>? operationLabelProvider,
+        bool labelBoundaries)
     {
-        if (target.Body.Operations.Count == 0)
+        if (graph.Inputs.Count == 0 &&
+            graph.Operations.Count == 0 &&
+            graph.Outputs.Count == 0)
         {
             return new GraphNodeContent(
                 ["(empty)"],
@@ -158,12 +169,15 @@ public static class AsciiGraphWriter
         }
 
         var adapter = TargetBodyRenderingAdapter.Create(
-            target,
-            operationLabelProvider);
+            graph,
+            operationLabelProvider,
+            labelBoundaries);
         var layout = Layout.Create(
             adapter.Graph,
             adapter.GetLabel,
-            contentProvider: null,
+            operation => RenderOperationContent(
+                operation,
+                operationLabelProvider),
             renderDanglingOutputs: false);
         using var writer = new StringWriter(CultureInfo.InvariantCulture);
 
@@ -180,6 +194,37 @@ public static class AsciiGraphWriter
             adapter.Outputs
                 .Select(operation => layout.GetNode(operation).GetInputX(0))
                 .ToArray());
+    }
+
+    private static GraphNodeContent? RenderOperationContent(
+        Operation operation,
+        Func<Operation, string?>? operationLabelProvider)
+    {
+        if (operation is not ConditionalRegionOperation conditional)
+        {
+            return null;
+        }
+
+        var whenTrue = RenderSignedGraph(
+            conditional.WhenTrue,
+            operationLabelProvider,
+            labelBoundaries: true);
+        var whenFalse = RenderSignedGraph(
+            conditional.WhenFalse,
+            operationLabelProvider,
+            labelBoundaries: true);
+        var lines = new List<string>
+        {
+            "then",
+        };
+        lines.AddRange(Indent(whenTrue.Lines));
+        lines.Add("else");
+        lines.AddRange(Indent(whenFalse.Lines));
+
+        return new GraphNodeContent(lines, [], []);
+
+        static IEnumerable<string> Indent(IEnumerable<string> lines) =>
+            lines.Select(line => $"  {line}");
     }
 
     private static void WriteLayout(Layout layout, TextWriter writer)

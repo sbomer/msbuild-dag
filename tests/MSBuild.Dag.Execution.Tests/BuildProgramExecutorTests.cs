@@ -205,6 +205,139 @@ public sealed class BuildProgramExecutorTests
         Assert.Equal(expected, values.Get(select.Result));
     }
 
+    [Theory]
+    [InlineData(true, 11, 20, "then")]
+    [InlineData(false, 10, 120, "else")]
+    public async Task ConditionalRegionExecutesOnlySelectedBranch(
+        bool conditionContent,
+        int expectedX,
+        int expectedY,
+        string expectedBranch)
+    {
+        var condition = new Value<bool>();
+        var x = new Value<int>();
+        var y = new Value<int>();
+        var thenX = new Value<int>();
+        var thenY = new Value<int>();
+        var elseX = new Value<int>();
+        var elseY = new Value<int>();
+        var updateX = new AddOperation(thenX, 1, "then");
+        var updateY = new AddOperation(elseY, 100, "else");
+        var xAfter = new Value<int>();
+        var yAfter = new Value<int>();
+        var conditional = new ConditionalRegionOperation(
+            condition,
+            [x, y],
+            new OperationGraph(
+                [thenX, thenY],
+                [updateX],
+                [updateX.Result, thenY]),
+            new OperationGraph(
+                [elseX, elseY],
+                [updateY],
+                [elseX, updateY.Result]),
+            [xAfter, yAfter]);
+        var values = new ValueStore();
+        values.Set(condition, conditionContent);
+        values.Set(x, 10);
+        values.Set(y, 20);
+        var executed = new List<string>();
+
+        await new OperationGraphExecutor().ExecuteAsync(
+            new OperationGraph(
+                [condition, x, y],
+                [conditional],
+                [xAfter, yAfter]),
+            values,
+            (operation, store, _) =>
+            {
+                var add = (AddOperation)operation;
+                executed.Add(add.Name);
+                store.Set(
+                    add.Result,
+                    store.Get(add.Input) + add.Increment);
+                return ValueTask.CompletedTask;
+            });
+
+        Assert.Equal(expectedX, values.Get(xAfter));
+        Assert.Equal(expectedY, values.Get(yAfter));
+        Assert.Equal([expectedBranch], executed);
+        Assert.False(
+            values.Contains(
+                conditionContent
+                    ? elseY
+                    : thenX));
+    }
+
+    [Fact]
+    public async Task ConditionalRegionsCanNest()
+    {
+        var outerCondition = new Value<bool>();
+        var innerCondition = new Value<bool>();
+        var input = new Value<int>();
+        var outerInnerCondition = new Value<bool>();
+        var outerInput = new Value<int>();
+        var innerTrueCondition = new Value<bool>();
+        var innerTrueInput = new Value<int>();
+        var innerFalseCondition = new Value<bool>();
+        var innerFalseInput = new Value<int>();
+        var innerTrue = new AddOperation(innerTrueInput, 1, "inner true");
+        var innerFalse = new AddOperation(innerFalseInput, 10, "inner false");
+        var innerResult = new Value<int>();
+        var inner = new ConditionalRegionOperation(
+            outerInnerCondition,
+            [outerInput],
+            new OperationGraph(
+                [innerTrueInput],
+                [innerTrue],
+                [innerTrue.Result]),
+            new OperationGraph(
+                [innerFalseInput],
+                [innerFalse],
+                [innerFalse.Result]),
+            [innerResult]);
+        var outerFalseCondition = new Value<bool>();
+        var outerFalseInput = new Value<int>();
+        var outerFalse = new AddOperation(outerFalseInput, 100, "outer false");
+        var result = new Value<int>();
+        var outer = new ConditionalRegionOperation(
+            outerCondition,
+            [innerCondition, input],
+            new OperationGraph(
+                [outerInnerCondition, outerInput],
+                [inner],
+                [innerResult]),
+            new OperationGraph(
+                [outerFalseCondition, outerFalseInput],
+                [outerFalse],
+                [outerFalse.Result]),
+            [result]);
+        var values = new ValueStore();
+        values.Set(outerCondition, true);
+        values.Set(innerCondition, false);
+        values.Set(input, 5);
+        var executed = new List<string>();
+
+        await new OperationGraphExecutor().ExecuteAsync(
+            new OperationGraph(
+                [outerCondition, innerCondition, input],
+                [outer],
+                [result]),
+            values,
+            (operation, store, _) =>
+            {
+                var add = (AddOperation)operation;
+                executed.Add(add.Name);
+                store.Set(
+                    add.Result,
+                    store.Get(add.Input) + add.Increment);
+                return ValueTask.CompletedTask;
+            });
+
+        Assert.Equal(15, values.Get(result));
+        Assert.Equal(["inner false"], executed);
+    }
+
     [Fact]
     public async Task EvaluatorDispatchesByOperationType()
     {
@@ -328,6 +461,24 @@ public sealed class BuildProgramExecutorTests
     private sealed class UnaryOperation(Value<int> input) : Operation
     {
         public Value<int> Input { get; } = input;
+
+        public Value<int> Result { get; } = new();
+
+        public override IReadOnlyList<Value> Inputs => [Input];
+
+        public override IReadOnlyList<Value> Outputs => [Result];
+    }
+
+    private sealed class AddOperation(
+        Value<int> input,
+        int increment,
+        string name) : Operation
+    {
+        public Value<int> Input { get; } = input;
+
+        public int Increment { get; } = increment;
+
+        public string Name { get; } = name;
 
         public Value<int> Result { get; } = new();
 

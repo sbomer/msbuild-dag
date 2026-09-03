@@ -316,8 +316,8 @@ public sealed class MSBuildProjectTranslatorTests
     {
         var result = TranslateAsset(assetName, "Build");
         var build = result.Targets["Build"];
-        var select = Assert.Single(
-            build.Body.Operations.OfType<SelectOperation<string>>());
+        var conditional = Assert.Single(
+            build.Body.Operations.OfType<ConditionalRegionOperation>());
         var values = new ValueStore();
 
         await new BuildProgramExecutor(
@@ -327,11 +327,36 @@ public sealed class MSBuildProjectTranslatorTests
             .ExecuteAsync(build);
 
         Assert.Same(
-            select.Result,
+            conditional.Outputs[0],
             result.Properties["Configuration"]);
         Assert.Equal(
             expectedConfiguration,
             values.Get(result.Properties["Configuration"]));
+    }
+
+    [Theory]
+    [InlineData("ConditionalPropertyGroup.proj", "A", "B")]
+    [InlineData("ConditionalPropertyGroupFalse.proj", "OldX", "OldY")]
+    public async Task ExecutesConditionalPropertyGroup(
+        string assetName,
+        string expectedX,
+        string expectedY)
+    {
+        var result = TranslateAsset(assetName, "Build");
+        var build = result.Targets["Build"];
+        var conditional = Assert.Single(
+            build.Body.Operations.OfType<ConditionalRegionOperation>());
+        var values = new ValueStore();
+
+        await new BuildProgramExecutor(
+            result.Program,
+            values,
+            CreateEvaluator().EvaluateAsync)
+            .ExecuteAsync(build);
+
+        Assert.Equal(2, conditional.Outputs.Count);
+        Assert.Equal(expectedX, values.Get(result.Properties["X"]));
+        Assert.Equal(expectedY, values.Get(result.Properties["Y"]));
     }
 
     [Theory]

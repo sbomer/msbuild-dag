@@ -239,6 +239,59 @@ public sealed class AsciiGraphWriterTests
     }
 
     [Fact]
+    public void ExpandedBuildProgramRendersConditionalRegions()
+    {
+        var condition = new Value<bool>();
+        var argument = new Value<string>();
+        var whenTrueInput = new Value<string>();
+        var whenFalseInput = new Value<string>();
+        var whenTrueResult = new Value<string>();
+        var whenFalseResult = new Value<string>();
+        var whenTrue = new TestOperation(
+            [whenTrueInput],
+            [whenTrueResult]);
+        var whenFalse = new TestOperation(
+            [whenFalseInput],
+            [whenFalseResult]);
+        var resultValue = new Value<string>();
+        var conditional = new ConditionalRegionOperation(
+            condition,
+            [argument],
+            new OperationGraph(
+                [whenTrueInput],
+                [whenTrue],
+                [whenTrueResult]),
+            new OperationGraph(
+                [whenFalseInput],
+                [whenFalse],
+                [whenFalseResult]),
+            [resultValue]);
+        var target = new Target(
+            new OperationGraph(
+                [condition, argument],
+                [conditional],
+                [resultValue]));
+
+        var result = AsciiGraphWriter.Render(
+            new BuildProgram([target]),
+            operationLabelProvider: operation =>
+                ReferenceEquals(operation, conditional)
+                    ? "if"
+                    : ReferenceEquals(operation, whenTrue)
+                        ? "true branch"
+                        : ReferenceEquals(operation, whenFalse)
+                            ? "false branch"
+                            : null);
+
+        Assert.Contains("then", result);
+        Assert.Contains("else", result);
+        Assert.Contains("i0", result);
+        Assert.Contains("o0", result);
+        Assert.Contains("true branch", result);
+        Assert.Contains("false branch", result);
+    }
+
+    [Fact]
     public void ExpandedBuildProgramRendersEmptyTargetBody()
     {
         var target = EmptyTarget();
