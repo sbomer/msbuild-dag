@@ -633,6 +633,30 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Fact]
+    public async Task TranslatesItemIdentityConditionToContainsDataflow()
+    {
+        var result = TranslateAsset("ItemIdentityCondition.proj", "Build");
+        var build = result.Targets["Build"];
+        var contains = Assert.Single(
+            build.Body.Operations.OfType<ContainsOperation<string>>());
+        var values = new ValueStore();
+
+        await new BuildProgramExecutor(
+            result.Program,
+            values,
+            CreateEvaluator().EvaluateAsync)
+            .ExecuteAsync(build);
+
+        Assert.Same(
+            contains.Result,
+            Assert.Single(
+                build.Body.Operations
+                    .OfType<ConditionalRegionOperation>())
+                .Condition);
+        Assert.Equal("true", values.Get(result.Properties["Found"]));
+    }
+
+    [Fact]
     public async Task TranslatesAndExecutesMessageTasksInOrder()
     {
         var result = TranslateAsset("Message.proj", "Build");
@@ -724,6 +748,16 @@ public sealed class MSBuildProjectTranslatorTests
                 static (operation, values, _) =>
                 {
                     values.Set(operation.Result, operation.Content);
+                    return ValueTask.CompletedTask;
+                })
+            .Add<ContainsOperation<string>>(
+                static (operation, values, _) =>
+                {
+                    values.Set(
+                        operation.Result,
+                        values.Get(operation.Values).Contains(
+                            values.Get(operation.Candidate),
+                            StringComparer.OrdinalIgnoreCase));
                     return ValueTask.CompletedTask;
                 })
             .Add<EqualOperation<string>>(

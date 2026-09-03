@@ -48,6 +48,16 @@ internal static class TranslatedOperationEvaluator
                             .ToArray());
                     return ValueTask.CompletedTask;
                 })
+            .Add<ContainsOperation<string>>(
+                static (operation, values, _) =>
+                {
+                    values.Set(
+                        operation.Result,
+                        values.Get(operation.Values).Contains(
+                            values.Get(operation.Candidate),
+                            StringComparer.OrdinalIgnoreCase));
+                    return ValueTask.CompletedTask;
+                })
             .Add<ExpandItemsExpressionOperation>(
                 static (operation, values, _) =>
                 {

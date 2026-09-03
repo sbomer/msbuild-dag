@@ -1,0 +1,10 @@
+<Project>
+  <Target Name="Build">
+    <ItemGroup>
+      <Candidate Include="other;help" />
+    </ItemGroup>
+    <PropertyGroup>
+      <Found Condition="'%(Candidate.Identity)' == 'help'">true</Found>
+    </PropertyGroup>
+  </Target>
+</Project>

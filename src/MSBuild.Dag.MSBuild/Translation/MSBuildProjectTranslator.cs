@@ -12,6 +12,9 @@ public sealed class MSBuildProjectTranslator
     private static readonly Regex s_comparisonCondition = new(
         @"^\s*'\$\((?<property>[^)]+)\)'\s*(?<operator>==|!=)\s*'(?<literal>[^']*)'\s*$",
         RegexOptions.CultureInvariant);
+    private static readonly Regex s_itemIdentityCondition = new(
+        @"^\s*'%\((?<item>[^.()]+)\.Identity\)'\s*==\s*'(?<literal>[^']*)'\s*$",
+        RegexOptions.CultureInvariant);
     private static readonly Regex s_propertyReference = new(
         @"\$\((?<property>[^()]+)\)",
         RegexOptions.CultureInvariant);
@@ -539,12 +542,7 @@ public sealed class MSBuildProjectTranslator
 
         if (!string.IsNullOrWhiteSpace(target.Condition))
         {
-            var match = s_comparisonCondition.Match(target.Condition);
-
-            if (match.Success)
-            {
-                AddPropertyRead(match.Groups["property"].Value);
-            }
+            AddConditionRead(target.Condition);
         }
 
         foreach (var child in target.Children)
@@ -639,6 +637,14 @@ public sealed class MSBuildProjectTranslator
             if (match.Success)
             {
                 AddPropertyRead(match.Groups["property"].Value);
+                return;
+            }
+
+            match = s_itemIdentityCondition.Match(expression);
+
+            if (match.Success)
+            {
+                AddItemRead(match.Groups["item"].Value);
             }
         }
 
@@ -1364,31 +1370,42 @@ public sealed class MSBuildProjectTranslator
         {
             var match = s_comparisonCondition.Match(expression);
 
-            if (!match.Success)
+            if (match.Success)
             {
-                throw Unsupported($"target condition '{expression}'");
+                var left = GetProperty(match.Groups["property"].Value);
+                var right = AddConstant(match.Groups["literal"].Value);
+
+                DagOperation comparison = match.Groups["operator"].Value switch
+                {
+                    "==" => new EqualOperation<string>(left, right),
+                    "!=" => new NotEqualOperation<string>(left, right),
+                    _ => throw new InvalidOperationException(
+                        "The condition parser produced an unknown comparison operator."),
+                };
+
+                AddOperation(comparison);
+
+                return comparison switch
+                {
+                    EqualOperation<string> equal => equal.Result,
+                    NotEqualOperation<string> notEqual => notEqual.Result,
+                    _ => throw new InvalidOperationException(
+                        "The condition parser produced an unknown comparison operation."),
+                };
             }
 
-            var left = GetProperty(match.Groups["property"].Value);
-            var right = AddConstant(match.Groups["literal"].Value);
+            match = s_itemIdentityCondition.Match(expression);
 
-            DagOperation comparison = match.Groups["operator"].Value switch
+            if (match.Success)
             {
-                "==" => new EqualOperation<string>(left, right),
-                "!=" => new NotEqualOperation<string>(left, right),
-                _ => throw new InvalidOperationException(
-                    "The condition parser produced an unknown comparison operator."),
-            };
+                var contains = new ContainsOperation<string>(
+                    GetItems(match.Groups["item"].Value),
+                    AddConstant(match.Groups["literal"].Value));
+                AddOperation(contains);
+                return contains.Result;
+            }
 
-            AddOperation(comparison);
-
-            return comparison switch
-            {
-                EqualOperation<string> equal => equal.Result,
-                NotEqualOperation<string> notEqual => notEqual.Result,
-                _ => throw new InvalidOperationException(
-                    "The condition parser produced an unknown comparison operation."),
-            };
+            throw Unsupported($"target condition '{expression}'");
         }
 
         public Value<string> ResolvePropertyExpression(string expression)

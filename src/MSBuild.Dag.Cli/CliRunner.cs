@@ -162,6 +162,11 @@ internal static class CliRunner
             return "==";
         }
 
+        if (operationType == typeof(ContainsOperation<>))
+        {
+            return "contains";
+        }
+
         return operationType == typeof(NotEqualOperation<>)
             ? "!="
             : null;
