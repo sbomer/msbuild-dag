@@ -58,6 +58,14 @@ internal static class TranslatedOperationEvaluator
                             StringComparer.OrdinalIgnoreCase));
                     return ValueTask.CompletedTask;
                 })
+            .Add<IsEmptyOperation<string>>(
+                static (operation, values, _) =>
+                {
+                    values.Set(
+                        operation.Result,
+                        values.Get(operation.Values).Count == 0);
+                    return ValueTask.CompletedTask;
+                })
             .Add<ExpandItemsExpressionOperation>(
                 static (operation, values, _) =>
                 {

@@ -15,6 +15,9 @@ public sealed class MSBuildProjectTranslator
     private static readonly Regex s_itemIdentityCondition = new(
         @"^\s*'%\((?<item>[^.()]+)\.Identity\)'\s*==\s*'(?<literal>[^']*)'\s*$",
         RegexOptions.CultureInvariant);
+    private static readonly Regex s_itemListCondition = new(
+        @"^\s*'@\((?<item>[^)]+)\)'\s*(?<operator>==|!=)\s*'(?<literal>[^']*)'\s*$",
+        RegexOptions.CultureInvariant);
     private static readonly Regex s_propertyReference = new(
         @"\$\((?<property>[^()]+)\)",
         RegexOptions.CultureInvariant);
@@ -641,6 +644,14 @@ public sealed class MSBuildProjectTranslator
             }
 
             match = s_itemIdentityCondition.Match(expression);
+
+            if (match.Success)
+            {
+                AddItemRead(match.Groups["item"].Value);
+                return;
+            }
+
+            match = s_itemListCondition.Match(expression);
 
             if (match.Success)
             {
@@ -1403,6 +1414,25 @@ public sealed class MSBuildProjectTranslator
                     AddConstant(match.Groups["literal"].Value));
                 AddOperation(contains);
                 return contains.Result;
+            }
+
+            match = s_itemListCondition.Match(expression);
+
+            if (match.Success &&
+                match.Groups["literal"].Value.Length == 0)
+            {
+                var isEmpty = new IsEmptyOperation<string>(
+                    GetItems(match.Groups["item"].Value));
+                AddOperation(isEmpty);
+
+                if (match.Groups["operator"].Value == "==")
+                {
+                    return isEmpty.Result;
+                }
+
+                var not = new NotOperation(isEmpty.Result);
+                AddOperation(not);
+                return not.Result;
             }
 
             throw Unsupported($"target condition '{expression}'");

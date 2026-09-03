@@ -657,6 +657,28 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Fact]
+    public async Task TranslatesNonemptyItemListTargetCondition()
+    {
+        var result = TranslateAsset("ItemListCondition.proj", "Build");
+        var build = result.Targets["Build"];
+        var isEmpty = Assert.Single(
+            build.Body.Operations.OfType<IsEmptyOperation<string>>());
+        var not = Assert.Single(
+            build.Body.Operations.OfType<NotOperation>());
+        var values = new ValueStore();
+
+        await new BuildProgramExecutor(
+            result.Program,
+            values,
+            CreateEvaluator().EvaluateAsync)
+            .ExecuteAsync(build);
+
+        Assert.Same(isEmpty.Result, not.Operand);
+        Assert.Same(not.Result, result.TargetConditions["Build"]);
+        Assert.True(values.Get(result.TargetConditions["Build"]));
+    }
+
+    [Fact]
     public async Task TranslatesAndExecutesMessageTasksInOrder()
     {
         var result = TranslateAsset("Message.proj", "Build");
@@ -758,6 +780,22 @@ public sealed class MSBuildProjectTranslatorTests
                         values.Get(operation.Values).Contains(
                             values.Get(operation.Candidate),
                             StringComparer.OrdinalIgnoreCase));
+                    return ValueTask.CompletedTask;
+                })
+            .Add<IsEmptyOperation<string>>(
+                static (operation, values, _) =>
+                {
+                    values.Set(
+                        operation.Result,
+                        values.Get(operation.Values).Count == 0);
+                    return ValueTask.CompletedTask;
+                })
+            .Add<NotOperation>(
+                static (operation, values, _) =>
+                {
+                    values.Set(
+                        operation.Result,
+                        !values.Get(operation.Operand));
                     return ValueTask.CompletedTask;
                 })
             .Add<EqualOperation<string>>(
