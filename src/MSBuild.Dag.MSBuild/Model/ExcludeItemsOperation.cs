@@ -3,18 +3,20 @@ using MSBuild.Dag.Core;
 namespace MSBuild.Dag.MSBuild;
 
 public sealed class ExcludeItemsOperation(
-    Value<IReadOnlyList<string>> includedItems,
-    Value<IReadOnlyList<string>> excludedItems,
+    Value<IReadOnlyList<MSBuildItem>> includedItems,
+    Value<IReadOnlyList<MSBuildItem>> excludedItems,
     Value<GuardToken>? guard = null)
     : Operation, IGuardedOperation
 {
-    public Value<IReadOnlyList<string>> IncludedItems { get; } = includedItems;
+    public Value<IReadOnlyList<MSBuildItem>> IncludedItems { get; } =
+        includedItems;
 
-    public Value<IReadOnlyList<string>> ExcludedItems { get; } = excludedItems;
+    public Value<IReadOnlyList<MSBuildItem>> ExcludedItems { get; } =
+        excludedItems;
 
     public Value<GuardToken>? Guard { get; } = guard;
 
-    public Value<IReadOnlyList<string>> Result { get; } = new();
+    public Value<IReadOnlyList<MSBuildItem>> Result { get; } = new();
 
     public override IReadOnlyList<Value> Inputs => Guard is null
         ? [IncludedItems, ExcludedItems]

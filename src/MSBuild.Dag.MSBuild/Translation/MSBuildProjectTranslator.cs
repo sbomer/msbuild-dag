@@ -59,7 +59,7 @@ public sealed class MSBuildProjectTranslator
             new Dictionary<string, StateLocation<string>>(
                 StringComparer.OrdinalIgnoreCase);
         var itemLocations =
-            new Dictionary<string, StateLocation<IReadOnlyList<string>>>(
+            new Dictionary<string, StateLocation<IReadOnlyList<MSBuildItem>>>(
                 StringComparer.OrdinalIgnoreCase);
         var valueSymbols = new ValueSymbolTableBuilder();
 
@@ -78,7 +78,7 @@ public sealed class MSBuildProjectTranslator
             {
                 itemLocations.TryAdd(
                     name,
-                    new StateLocation<IReadOnlyList<string>>());
+                    new StateLocation<IReadOnlyList<MSBuildItem>>());
             }
         }
 
@@ -89,10 +89,10 @@ public sealed class MSBuildProjectTranslator
                     pair.Value,
                     projectInstance.GetPropertyValue(pair.Key))),
             .. itemLocations.Select(
-                pair => new StateInitialization<IReadOnlyList<string>>(
+                pair => new StateInitialization<IReadOnlyList<MSBuildItem>>(
                     pair.Value,
                     projectInstance.GetItems(pair.Key)
-                        .Select(item => item.EvaluatedInclude)
+                        .Select(CreateItem)
                         .ToArray())),
         ]);
 
@@ -128,7 +128,7 @@ public sealed class MSBuildProjectTranslator
                 StringComparer.OrdinalIgnoreCase);
             var itemReads = access.ReadItems.ToDictionary(
                 name => name,
-                name => new StateRead<IReadOnlyList<string>>(
+                name => new StateRead<IReadOnlyList<MSBuildItem>>(
                     itemLocations[name]),
                 StringComparer.OrdinalIgnoreCase);
             var context = new TranslationContext(
@@ -212,7 +212,7 @@ public sealed class MSBuildProjectTranslator
                                     !string.IsNullOrWhiteSpace(target.Condition),
                             }),
                         .. access.WriteItems.Select(
-                            name => new StateWrite<IReadOnlyList<string>>(
+                            name => new StateWrite<IReadOnlyList<MSBuildItem>>(
                                 itemLocations[name],
                                 context.Items[name])
                             {
@@ -309,7 +309,7 @@ public sealed class MSBuildProjectTranslator
         var properties = new Dictionary<string, Value<string>>(
             StringComparer.OrdinalIgnoreCase);
         var items =
-            new Dictionary<string, Value<IReadOnlyList<string>>>(
+            new Dictionary<string, Value<IReadOnlyList<MSBuildItem>>>(
                 StringComparer.OrdinalIgnoreCase);
         var state = linked.GetStateAfter(
             createdDefinitions[projectInstance.Targets[targetName]]);
@@ -324,7 +324,7 @@ public sealed class MSBuildProjectTranslator
         {
             items.Add(
                 name,
-                (Value<IReadOnlyList<string>>)state[location]);
+                (Value<IReadOnlyList<MSBuildItem>>)state[location]);
             valueSymbols.Add(state[location], $"@({name})");
         }
 
@@ -1086,15 +1086,48 @@ public sealed class MSBuildProjectTranslator
         {
             if (!string.IsNullOrWhiteSpace(item.Condition))
             {
-                throw Unsupported("item conditions");
+                throw Unsupported(
+                    $"condition on item operation {FormatItemOperation(item)}");
+            }
+
+            if (IsMetadataUpdate(item))
+            {
+                if (item.Metadata.Any(
+                    metadata =>
+                        !string.IsNullOrWhiteSpace(metadata.Condition) ||
+                        ContainsUnsupportedMetadataReference(metadata.Value)))
+                {
+                    throw Unsupported(
+                        $"item operation {FormatItemOperation(item)}; metadata " +
+                        "updates currently support only literal text and " +
+                        "%(Identity)");
+                }
+
+                var update = new UpdateItemMetadataOperation(
+                    context.GetItems(item.ItemType),
+                    item.Metadata.ToDictionary(
+                        static metadata => metadata.Name,
+                        static metadata => metadata.Value,
+                        StringComparer.OrdinalIgnoreCase),
+                    context.TargetGuard);
+                context.AddOperation(update);
+                context.SetItems(item.ItemType, update.Result);
+                continue;
             }
 
             if (string.IsNullOrWhiteSpace(item.Include) ||
                 !string.IsNullOrWhiteSpace(item.Remove) ||
-                item.Metadata.Count > 0)
+                item.Metadata.Count > 0 ||
+                !string.IsNullOrWhiteSpace(item.MatchOnMetadata) ||
+                !string.IsNullOrWhiteSpace(item.MatchOnMetadataOptions) ||
+                !string.IsNullOrWhiteSpace(item.KeepMetadata) ||
+                !string.IsNullOrWhiteSpace(item.RemoveMetadata) ||
+                !string.IsNullOrWhiteSpace(item.KeepDuplicates))
             {
                 throw Unsupported(
-                    "item operations other than Include with optional Exclude");
+                    $"item operation {FormatItemOperation(item)}; only Include " +
+                    "with optional Exclude and metadata-only updates are " +
+                    "currently supported");
             }
 
             var existingItems = context.GetItems(item.ItemType);
@@ -1120,6 +1153,60 @@ public sealed class MSBuildProjectTranslator
 
             context.AddOperation(concat);
             context.SetItems(item.ItemType, concat.Result);
+        }
+    }
+
+    private static bool IsMetadataUpdate(
+        ProjectItemGroupTaskItemInstance item) =>
+        string.IsNullOrWhiteSpace(item.Include) &&
+        string.IsNullOrWhiteSpace(item.Exclude) &&
+        string.IsNullOrWhiteSpace(item.Remove) &&
+        string.IsNullOrWhiteSpace(item.MatchOnMetadata) &&
+        string.IsNullOrWhiteSpace(item.MatchOnMetadataOptions) &&
+        string.IsNullOrWhiteSpace(item.KeepMetadata) &&
+        string.IsNullOrWhiteSpace(item.RemoveMetadata) &&
+        string.IsNullOrWhiteSpace(item.KeepDuplicates) &&
+        item.Metadata.Count > 0;
+
+    private static bool ContainsUnsupportedMetadataReference(string value) =>
+        value.Contains("$(", StringComparison.Ordinal) ||
+        value.Contains("@(", StringComparison.Ordinal) ||
+        value.Replace("%(Identity)", string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Contains("%(", StringComparison.Ordinal);
+
+    private static string FormatItemOperation(
+        ProjectItemGroupTaskItemInstance item)
+    {
+        var attributes = new List<string>();
+
+        AddAttribute("Include", item.Include);
+        AddAttribute("Exclude", item.Exclude);
+        AddAttribute("Remove", item.Remove);
+        AddAttribute("MatchOnMetadata", item.MatchOnMetadata);
+        AddAttribute("MatchOnMetadataOptions", item.MatchOnMetadataOptions);
+        AddAttribute("KeepMetadata", item.KeepMetadata);
+        AddAttribute("RemoveMetadata", item.RemoveMetadata);
+        AddAttribute("KeepDuplicates", item.KeepDuplicates);
+        AddAttribute("Condition", item.Condition);
+
+        foreach (var metadata in item.Metadata)
+        {
+            AddAttribute(metadata.Name, metadata.Value);
+        }
+
+        return $"<{item.ItemType}" +
+            (attributes.Count == 0
+                ? string.Empty
+                : " " + string.Join(" ", attributes)) +
+            " />";
+
+        void AddAttribute(string name, string value)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                attributes.Add(
+                    $"{name}=\"{value.Replace("\"", "&quot;", StringComparison.Ordinal)}\"");
+            }
         }
     }
 
@@ -1153,11 +1240,15 @@ public sealed class MSBuildProjectTranslator
     {
         var sourcesExpression = GetRequiredParameter(task, "Sources");
         var configurationExpression = GetRequiredParameter(task, "Configuration");
-        var sources = context.ResolveItemsExpression(sourcesExpression);
+        var itemSources = context.ResolveItemsExpression(sourcesExpression);
+        var identities = new ProjectItemIdentitiesOperation(
+            itemSources,
+            context.TargetGuard);
+        context.AddOperation(identities);
         var configuration =
             context.ResolvePropertyExpression(configurationExpression);
         var compile = new ToyCompileOperation(
-            sources,
+            identities.Result,
             configuration,
             context.CreateControl());
 
@@ -1297,18 +1388,27 @@ public sealed class MSBuildProjectTranslator
         IReadOnlySet<string> ReadItems,
         IReadOnlySet<string> WriteItems);
 
+    private static MSBuildItem CreateItem(ProjectItemInstance item) =>
+        new(
+            item.EvaluatedInclude,
+            item.Metadata.Select(
+                static metadata =>
+                    KeyValuePair.Create(
+                        metadata.Name,
+                        metadata.EvaluatedValue)));
+
     private sealed class TranslationContext
     {
         public TranslationContext(
             IReadOnlyDictionary<string, Value<string>> properties,
-            IReadOnlyDictionary<string, Value<IReadOnlyList<string>>> items,
+            IReadOnlyDictionary<string, Value<IReadOnlyList<MSBuildItem>>> items,
             ValueSymbolTableBuilder valueSymbols)
         {
             Properties = new Dictionary<string, Value<string>>(
                 properties,
                 StringComparer.OrdinalIgnoreCase);
             Items =
-                new Dictionary<string, Value<IReadOnlyList<string>>>(
+                new Dictionary<string, Value<IReadOnlyList<MSBuildItem>>>(
                     items,
                     StringComparer.OrdinalIgnoreCase);
             ValueSymbols = valueSymbols;
@@ -1316,7 +1416,10 @@ public sealed class MSBuildProjectTranslator
 
         public Dictionary<string, Value<string>> Properties { get; }
 
-        public Dictionary<string, Value<IReadOnlyList<string>>> Items { get; }
+        public Dictionary<string, Value<IReadOnlyList<MSBuildItem>>> Items
+        {
+            get;
+        }
 
         private ValueSymbolTableBuilder ValueSymbols { get; }
 
@@ -1343,7 +1446,7 @@ public sealed class MSBuildProjectTranslator
 
         public void SetItems(
             string name,
-            Value<IReadOnlyList<string>> value)
+            Value<IReadOnlyList<MSBuildItem>> value)
         {
             Items[name] = value;
             AddItemSymbol(name, value);
@@ -1409,8 +1512,12 @@ public sealed class MSBuildProjectTranslator
 
             if (match.Success)
             {
-                var contains = new ContainsOperation<string>(
+                var identities = new ProjectItemIdentitiesOperation(
                     GetItems(match.Groups["item"].Value),
+                    TargetGuard);
+                AddOperation(identities);
+                var contains = new ContainsOperation<string>(
+                    identities.Result,
                     AddConstant(match.Groups["literal"].Value));
                 AddOperation(contains);
                 return contains.Result;
@@ -1421,7 +1528,7 @@ public sealed class MSBuildProjectTranslator
             if (match.Success &&
                 match.Groups["literal"].Value.Length == 0)
             {
-                var isEmpty = new IsEmptyOperation<string>(
+                var isEmpty = new IsEmptyOperation<MSBuildItem>(
                     GetItems(match.Groups["item"].Value));
                 AddOperation(isEmpty);
 
@@ -1453,7 +1560,8 @@ public sealed class MSBuildProjectTranslator
             return AddConstant(expression);
         }
 
-        public Value<IReadOnlyList<string>> ResolveItemsExpression(string expression)
+        public Value<IReadOnlyList<MSBuildItem>> ResolveItemsExpression(
+            string expression)
         {
             if (TryGetReference(expression, "@(", out var itemType))
             {
@@ -1478,13 +1586,18 @@ public sealed class MSBuildProjectTranslator
                 throw Unsupported($"item expression '{expression}'");
             }
 
-            IReadOnlyList<string> values = expression
-                .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            IReadOnlyList<MSBuildItem> values = expression
+                .Split(
+                    ';',
+                    StringSplitOptions.RemoveEmptyEntries |
+                    StringSplitOptions.TrimEntries)
+                .Select(static identity => new MSBuildItem(identity))
+                .ToArray();
 
             return AddConstant(values);
         }
 
-        public Value<IReadOnlyList<string>> GetItems(string itemType)
+        public Value<IReadOnlyList<MSBuildItem>> GetItems(string itemType)
         {
             if (Items.TryGetValue(itemType, out var value))
             {

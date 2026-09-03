@@ -126,9 +126,9 @@ internal static class CliRunner
 
     private static string FormatItems(
         ValueStore values,
-        Value<IReadOnlyList<string>> value) =>
+        Value<IReadOnlyList<MSBuildItem>> value) =>
         values.IsAvailable(value)
-            ? string.Join("; ", values.Get(value))
+            ? string.Join("; ", values.Get(value).Select(FormatItem))
             : "(unavailable)";
 
     private static string? GetOperationLabel(
@@ -148,6 +148,23 @@ internal static class CliRunner
         if (operation is ConditionalRegionOperation)
         {
             return "if";
+        }
+
+        if (operation is ProjectItemIdentitiesOperation)
+        {
+            return "identities";
+        }
+
+        if (operation is UpdateItemMetadataOperation update)
+        {
+            return string.Join(
+                ", ",
+                update.Metadata.Select(
+                    static pair =>
+                        $"{pair.Key}='{pair.Value.Replace(
+                            "'",
+                            "''",
+                            StringComparison.Ordinal)}'"));
         }
 
         if (!operation.GetType().IsGenericType)
@@ -182,6 +199,8 @@ internal static class CliRunner
         {
             null => "null",
             string value => $"'{value.Replace("'", "''", StringComparison.Ordinal)}'",
+            IReadOnlyList<MSBuildItem> items =>
+                $"@({string.Join("; ", items.Select(FormatItem))})",
             IReadOnlyList<string> items =>
                 $"@({string.Join("; ", items)})",
             bool value => value ? "true" : "false",
@@ -189,6 +208,26 @@ internal static class CliRunner
                 value.ToString(format: null, CultureInfo.InvariantCulture),
             _ => content.ToString() ?? string.Empty,
         };
+
+    private static string FormatItem(MSBuildItem item)
+    {
+        if (item.Metadata.Count == 0)
+        {
+            return item.Identity;
+        }
+
+        var metadata = string.Join(
+            ", ",
+            item.Metadata
+                .OrderBy(static pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(
+                    static pair =>
+                        $"{pair.Key}='{pair.Value.Replace(
+                            "'",
+                            "''",
+                            StringComparison.Ordinal)}'"));
+        return $"{item.Identity} {{{metadata}}}";
+    }
 
     private static string? GetValueLabel(
         Value value,

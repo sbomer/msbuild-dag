@@ -8,7 +8,7 @@ public sealed record TranslationResult(
     IReadOnlyDictionary<string, TargetDefinition> TargetDefinitions,
     IReadOnlyDictionary<string, Target> Targets,
     IReadOnlyDictionary<string, Value<string>> Properties,
-    IReadOnlyDictionary<string, Value<IReadOnlyList<string>>> Items,
+    IReadOnlyDictionary<string, Value<IReadOnlyList<MSBuildItem>>> Items,
     IReadOnlyDictionary<Value, IReadOnlyList<ValueSymbol>> ValueSymbols,
     IReadOnlyDictionary<string, Value<bool>> TargetConditions,
     IReadOnlyList<string> Warnings);

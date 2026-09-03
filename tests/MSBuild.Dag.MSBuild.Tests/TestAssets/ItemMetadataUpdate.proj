@@ -1,0 +1,16 @@
+<Project>
+  <ItemGroup>
+    <SubsetName Include="clr">
+      <Kind>runtime</Kind>
+    </SubsetName>
+    <SubsetName Include="libs">
+      <Kind>library</Kind>
+    </SubsetName>
+  </ItemGroup>
+
+  <Target Name="Build">
+    <ItemGroup>
+      <SubsetName Text="- %(Identity)" />
+    </ItemGroup>
+  </Target>
+</Project>

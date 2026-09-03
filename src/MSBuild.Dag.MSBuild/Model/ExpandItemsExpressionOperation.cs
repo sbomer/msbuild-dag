@@ -19,7 +19,7 @@ public sealed class ExpandItemsExpressionOperation(
 
     public Value<GuardToken>? Guard { get; } = guard;
 
-    public Value<IReadOnlyList<string>> Result { get; } = new();
+    public Value<IReadOnlyList<MSBuildItem>> Result { get; } = new();
 
     public override IReadOnlyList<Value> Inputs =>
         Guard is null ? [Source] : [Guard, Source];

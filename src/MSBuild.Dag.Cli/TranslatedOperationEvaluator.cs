@@ -20,7 +20,7 @@ internal static class TranslatedOperationEvaluator
                     values.Set(operation.Result, operation.Content);
                     return ValueTask.CompletedTask;
                 })
-            .Add<ConstantOperation<IReadOnlyList<string>>>(
+            .Add<ConstantOperation<IReadOnlyList<MSBuildItem>>>(
                 static (operation, values, _) =>
                 {
                     values.Set(operation.Result, operation.Content);
@@ -40,11 +40,40 @@ internal static class TranslatedOperationEvaluator
                 static (operation, values, _) =>
                 {
                     var excludedItems = values.Get(operation.ExcludedItems)
+                        .Select(static item => item.Identity)
                         .ToHashSet(StringComparer.OrdinalIgnoreCase);
                     values.Set(
                         operation.Result,
                         values.Get(operation.IncludedItems)
-                            .Where(item => !excludedItems.Contains(item))
+                            .Where(item =>
+                                !excludedItems.Contains(item.Identity))
+                            .ToArray());
+                    return ValueTask.CompletedTask;
+                })
+            .Add<UpdateItemMetadataOperation>(
+                static (operation, values, _) =>
+                {
+                    values.Set(
+                        operation.Result,
+                        values.Get(operation.Items)
+                            .Select(item => item.WithMetadata(
+                                operation.Metadata.ToDictionary(
+                                    static pair => pair.Key,
+                                    pair => pair.Value.Replace(
+                                        "%(Identity)",
+                                        item.Identity,
+                                        StringComparison.OrdinalIgnoreCase),
+                                    StringComparer.OrdinalIgnoreCase)))
+                            .ToArray());
+                    return ValueTask.CompletedTask;
+                })
+            .Add<ProjectItemIdentitiesOperation>(
+                static (operation, values, _) =>
+                {
+                    values.Set(
+                        operation.Result,
+                        values.Get(operation.Items)
+                            .Select(static item => item.Identity)
                             .ToArray());
                     return ValueTask.CompletedTask;
                 })
@@ -58,7 +87,7 @@ internal static class TranslatedOperationEvaluator
                             StringComparer.OrdinalIgnoreCase));
                     return ValueTask.CompletedTask;
                 })
-            .Add<IsEmptyOperation<string>>(
+            .Add<IsEmptyOperation<MSBuildItem>>(
                 static (operation, values, _) =>
                 {
                     values.Set(
@@ -76,13 +105,15 @@ internal static class TranslatedOperationEvaluator
                                 replacement.OldValue,
                                 replacement.NewValue,
                                 StringComparison.Ordinal));
-                    IReadOnlyList<string> items = Microsoft.Build.Evaluation
+                    IReadOnlyList<MSBuildItem> items = Microsoft.Build.Evaluation
                         .ProjectCollection
                         .Unescape(expanded)
                         .Split(
                             ';',
                             StringSplitOptions.RemoveEmptyEntries |
-                            StringSplitOptions.TrimEntries);
+                            StringSplitOptions.TrimEntries)
+                        .Select(static identity => new MSBuildItem(identity))
+                        .ToArray();
                     values.Set(operation.Result, items);
                     return ValueTask.CompletedTask;
                 })

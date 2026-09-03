@@ -1,0 +1,8 @@
+<Project>
+  <Target Name="Build">
+    <ItemGroup>
+      <Candidate Include="value"
+                 Text="- %(Identity)" />
+    </ItemGroup>
+  </Target>
+</Project>

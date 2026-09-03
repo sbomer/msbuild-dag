@@ -2164,6 +2164,11 @@ public static class AsciiGraphWriter
             string value => value.Length == 0 ? "''" : value,
             IReadOnlyList<string> items =>
                 $"@({string.Join("; ", items)})",
+            System.Collections.IEnumerable items =>
+                $"@({string.Join(
+                    "; ",
+                    items.Cast<object>().Select(
+                        static item => item.ToString()))})",
             bool value => value ? "true" : "false",
             IFormattable value =>
                 value.ToString(format: null, CultureInfo.InvariantCulture),

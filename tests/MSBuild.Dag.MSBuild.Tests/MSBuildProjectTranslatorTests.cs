@@ -39,17 +39,20 @@ public sealed class MSBuildProjectTranslatorTests
             result.Program.GetPredecessors(afterBuild));
 
         var compile = Assert.Single(graph.Operations.OfType<ToyCompileOperation>());
+        var sourceIdentities = Assert.Single(
+            graph.Operations.OfType<ProjectItemIdentitiesOperation>());
         var configuration = Assert.Single(
             prepare.Body.Operations.OfType<ConstantOperation<string>>(),
             operation => operation.Content == "Debug");
         var concat = Assert.Single(
             collectSources.Body.Operations.OfType<ConcatItemsOperation>());
 
-        Assert.Null(graph.GetProducer(compile.Sources));
+        Assert.Same(sourceIdentities, graph.GetProducer(compile.Sources));
+        Assert.Null(graph.GetProducer(sourceIdentities.Items));
         Assert.Null(graph.GetProducer(compile.Configuration));
         Assert.Same(
             GetExternalOutput(collectSources, concat.Result),
-            GetExternalInput(build, compile.Sources));
+            GetExternalInput(build, sourceIdentities.Items));
         Assert.Same(
             GetExternalOutput(build, compile.Assembly),
             result.Properties["AssemblyPath"]);
@@ -77,14 +80,16 @@ public sealed class MSBuildProjectTranslatorTests
             GetExternalOutput(collectSources, concat.Result),
             build.Inputs);
 
-        Assert.Empty(graph.GetDependencies(compile));
+        Assert.Equal([sourceIdentities], graph.GetDependencies(compile));
         Assert.Null(configuration.Guard);
         Assert.Equal([configuration.Result], configuration.Outputs);
 
         var appendedItems = Assert.Single(
             collectSources.Body.Operations
-                .OfType<ConstantOperation<IReadOnlyList<string>>>(),
-            operation => operation.Content.SequenceEqual(["Generated.cs"]));
+                .OfType<ConstantOperation<IReadOnlyList<MSBuildItem>>>(),
+            operation => operation.Content
+                .Select(static item => item.Identity)
+                .SequenceEqual(["Generated.cs"]));
 
         Assert.Null(appendedItems.Guard);
         Assert.Equal([appendedItems.Result], appendedItems.Outputs);
@@ -263,14 +268,14 @@ public sealed class MSBuildProjectTranslatorTests
             GetExternalInput(build, expansion.Source));
         Assert.Equal(
             ["clr", "libs", "native"],
-            values.Get(result.Items["SpecifiedSubsetName"]));
+            GetIdentities(values.Get(result.Items["SpecifiedSubsetName"])));
         var specifiedItems = Assert.IsType<ConcatItemsOperation>(
             build.Body.GetProducer(exclusion.IncludedItems));
 
         Assert.Same(expansion.Result, specifiedItems.AppendedItems);
         Assert.Equal(
             ["libs"],
-            values.Get(result.Items["InvalidSpecifiedSubsetName"]));
+            GetIdentities(values.Get(result.Items["InvalidSpecifiedSubsetName"])));
     }
 
     [Fact]
@@ -294,12 +299,14 @@ public sealed class MSBuildProjectTranslatorTests
             result.Targets["Build"].Body.Operations
                 .OfType<ToyCompileOperation>());
         var build = result.Targets["Build"];
+        var sourceIdentities = Assert.IsType<ProjectItemIdentitiesOperation>(
+            build.Body.GetProducer(buildCompile.Sources));
 
         Assert.Same(
             GetExternalInput(build, buildCompile.Configuration),
             result.Properties["Configuration"]);
         Assert.Same(
-            GetExternalInput(build, buildCompile.Sources),
+            GetExternalInput(build, sourceIdentities.Items),
             result.Items["Compile"]);
     }
 
@@ -637,6 +644,8 @@ public sealed class MSBuildProjectTranslatorTests
     {
         var result = TranslateAsset("ItemIdentityCondition.proj", "Build");
         var build = result.Targets["Build"];
+        var identities = Assert.Single(
+            build.Body.Operations.OfType<ProjectItemIdentitiesOperation>());
         var contains = Assert.Single(
             build.Body.Operations.OfType<ContainsOperation<string>>());
         var values = new ValueStore();
@@ -647,6 +656,9 @@ public sealed class MSBuildProjectTranslatorTests
             CreateEvaluator().EvaluateAsync)
             .ExecuteAsync(build);
 
+        Assert.Same(
+            identities.Result,
+            contains.Values);
         Assert.Same(
             contains.Result,
             Assert.Single(
@@ -662,7 +674,7 @@ public sealed class MSBuildProjectTranslatorTests
         var result = TranslateAsset("ItemListCondition.proj", "Build");
         var build = result.Targets["Build"];
         var isEmpty = Assert.Single(
-            build.Body.Operations.OfType<IsEmptyOperation<string>>());
+            build.Body.Operations.OfType<IsEmptyOperation<MSBuildItem>>());
         var not = Assert.Single(
             build.Body.Operations.OfType<NotOperation>());
         var values = new ValueStore();
@@ -676,6 +688,45 @@ public sealed class MSBuildProjectTranslatorTests
         Assert.Same(isEmpty.Result, not.Operand);
         Assert.Same(not.Result, result.TargetConditions["Build"]);
         Assert.True(values.Get(result.TargetConditions["Build"]));
+    }
+
+    [Fact]
+    public void UnsupportedItemOperationReportsActualOperation()
+    {
+        var exception = Assert.Throws<NotSupportedException>(
+            () => TranslateAsset("UnsupportedItemMetadata.proj", "Build"));
+
+        Assert.Contains(
+            "<Candidate Include=\"value\" Text=\"- %(Identity)\" />",
+            exception.Message);
+        Assert.Contains(
+            "only Include with optional Exclude and metadata-only updates",
+            exception.Message);
+    }
+
+    [Fact]
+    public async Task UpdatesMetadataOnEveryExistingItemUsingIdentity()
+    {
+        var result = TranslateAsset("ItemMetadataUpdate.proj", "Build");
+        var build = result.Targets["Build"];
+        var update = Assert.Single(
+            build.Body.Operations.OfType<UpdateItemMetadataOperation>());
+        var values = new ValueStore();
+
+        await new BuildProgramExecutor(
+            result.Program,
+            values,
+            CreateEvaluator().EvaluateAsync)
+            .ExecuteAsync(build);
+
+        Assert.Equal("- %(Identity)", update.Metadata["Text"]);
+
+        var items = values.Get(result.Items["SubsetName"]);
+        Assert.Equal(["clr", "libs"], GetIdentities(items));
+        Assert.Equal("runtime", items[0].Metadata["Kind"]);
+        Assert.Equal("- clr", items[0].Metadata["Text"]);
+        Assert.Equal("library", items[1].Metadata["Kind"]);
+        Assert.Equal("- libs", items[1].Metadata["Text"]);
     }
 
     [Fact]
@@ -766,7 +817,7 @@ public sealed class MSBuildProjectTranslatorTests
                     values.Set(operation.Result, operation.Content);
                     return ValueTask.CompletedTask;
                 })
-            .Add<ConstantOperation<IReadOnlyList<string>>>(
+            .Add<ConstantOperation<IReadOnlyList<MSBuildItem>>>(
                 static (operation, values, _) =>
                 {
                     values.Set(operation.Result, operation.Content);
@@ -782,7 +833,7 @@ public sealed class MSBuildProjectTranslatorTests
                             StringComparer.OrdinalIgnoreCase));
                     return ValueTask.CompletedTask;
                 })
-            .Add<IsEmptyOperation<string>>(
+            .Add<IsEmptyOperation<MSBuildItem>>(
                 static (operation, values, _) =>
                 {
                     values.Set(
@@ -830,11 +881,40 @@ public sealed class MSBuildProjectTranslatorTests
                 static (operation, values, _) =>
                 {
                     var excludedItems = values.Get(operation.ExcludedItems)
+                        .Select(static item => item.Identity)
                         .ToHashSet(StringComparer.OrdinalIgnoreCase);
                     values.Set(
                         operation.Result,
                         values.Get(operation.IncludedItems)
-                            .Where(item => !excludedItems.Contains(item))
+                            .Where(item =>
+                                !excludedItems.Contains(item.Identity))
+                            .ToArray());
+                    return ValueTask.CompletedTask;
+                })
+            .Add<UpdateItemMetadataOperation>(
+                static (operation, values, _) =>
+                {
+                    values.Set(
+                        operation.Result,
+                        values.Get(operation.Items)
+                            .Select(item => item.WithMetadata(
+                                operation.Metadata.ToDictionary(
+                                    static pair => pair.Key,
+                                    pair => pair.Value.Replace(
+                                        "%(Identity)",
+                                        item.Identity,
+                                        StringComparison.OrdinalIgnoreCase),
+                                    StringComparer.OrdinalIgnoreCase)))
+                            .ToArray());
+                    return ValueTask.CompletedTask;
+                })
+            .Add<ProjectItemIdentitiesOperation>(
+                static (operation, values, _) =>
+                {
+                    values.Set(
+                        operation.Result,
+                        values.Get(operation.Items)
+                            .Select(static item => item.Identity)
                             .ToArray());
                     return ValueTask.CompletedTask;
                 })
@@ -848,12 +928,14 @@ public sealed class MSBuildProjectTranslatorTests
                                 replacement.OldValue,
                                 replacement.NewValue,
                                 StringComparison.Ordinal));
-                    IReadOnlyList<string> items = Microsoft.Build.Evaluation
+                    IReadOnlyList<MSBuildItem> items = Microsoft.Build.Evaluation
                         .ProjectCollection.Unescape(expanded)
                         .Split(
                             ';',
                             StringSplitOptions.RemoveEmptyEntries |
-                            StringSplitOptions.TrimEntries);
+                            StringSplitOptions.TrimEntries)
+                        .Select(static identity => new MSBuildItem(identity))
+                        .ToArray();
                     values.Set(operation.Result, items);
                     return ValueTask.CompletedTask;
                 })
@@ -878,6 +960,10 @@ public sealed class MSBuildProjectTranslatorTests
                             $"references missing target " +
                             $"'{operation.MissingTargetName}' through " +
                             $"{operation.AttributeName}.")));
+
+    private static string[] GetIdentities(
+        IReadOnlyList<MSBuildItem> items) =>
+        items.Select(static item => item.Identity).ToArray();
 
     private static Value GetExternalInput(
         Target target,
