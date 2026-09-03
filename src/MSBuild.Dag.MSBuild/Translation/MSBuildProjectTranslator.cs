@@ -55,6 +55,7 @@ public sealed class MSBuildProjectTranslator
         var itemLocations =
             new Dictionary<string, StateLocation<IReadOnlyList<string>>>(
                 StringComparer.OrdinalIgnoreCase);
+        var valueSymbols = new ValueSymbolTableBuilder();
 
         foreach (var target in sourceTargets)
         {
@@ -88,6 +89,25 @@ public sealed class MSBuildProjectTranslator
                         .Select(item => item.EvaluatedInclude)
                         .ToArray())),
         ]);
+
+        foreach (var initialization in evaluation.Initializations)
+        {
+            var property = propertyLocations.FirstOrDefault(
+                pair => ReferenceEquals(pair.Value, initialization.Location));
+            if (property.Key is not null)
+            {
+                valueSymbols.Add(
+                    initialization.InitialValue.Value,
+                    $"$({property.Key})");
+                continue;
+            }
+
+            var item = itemLocations.First(
+                pair => ReferenceEquals(pair.Value, initialization.Location));
+            valueSymbols.Add(
+                initialization.InitialValue.Value,
+                $"@({item.Key})");
+        }
         var targetBodies = new Dictionary<MSBuildTarget, TargetBody>(
             ReferenceEqualityComparer.Instance);
         var targetConditions = new Dictionary<string, Value<bool>>(
@@ -113,7 +133,18 @@ public sealed class MSBuildProjectTranslator
                 itemReads.ToDictionary(
                     pair => pair.Key,
                     pair => pair.Value.Value,
-                    StringComparer.OrdinalIgnoreCase));
+                    StringComparer.OrdinalIgnoreCase),
+                valueSymbols);
+
+            foreach (var (name, read) in propertyReads)
+            {
+                valueSymbols.Add(read.Value, $"$({name})");
+            }
+
+            foreach (var (name, read) in itemReads)
+            {
+                valueSymbols.Add(read.Value, $"@({name})");
+            }
             Value<bool>? targetCondition = null;
 
             if (!string.IsNullOrWhiteSpace(target.Condition))
@@ -249,12 +280,24 @@ public sealed class MSBuildProjectTranslator
 
         foreach (var sourceTarget in sourceTargets)
         {
+            var linkedTarget =
+                linked.Targets[createdDefinitions[sourceTarget]];
+
+            for (var index = 0;
+                index < linkedTarget.Body.Outputs.Count;
+                index++)
+            {
+                valueSymbols.Copy(
+                    linkedTarget.Body.Outputs[index],
+                    linkedTarget.Outputs[index]);
+            }
+
             targetDefinitions.Add(
                 sourceTarget.Name,
                 createdDefinitions[sourceTarget]);
             targets.Add(
                 sourceTarget.Name,
-                linked.Targets[createdDefinitions[sourceTarget]]);
+                linkedTarget);
         }
 
         var properties = new Dictionary<string, Value<string>>(
@@ -268,6 +311,7 @@ public sealed class MSBuildProjectTranslator
         foreach (var (name, location) in propertyLocations)
         {
             properties.Add(name, (Value<string>)state[location]);
+            valueSymbols.Add(state[location], $"$({name})");
         }
 
         foreach (var (name, location) in itemLocations)
@@ -275,6 +319,7 @@ public sealed class MSBuildProjectTranslator
             items.Add(
                 name,
                 (Value<IReadOnlyList<string>>)state[location]);
+            valueSymbols.Add(state[location], $"@({name})");
         }
 
         return new TranslationResult(
@@ -284,6 +329,7 @@ public sealed class MSBuildProjectTranslator
             targets,
             properties,
             items,
+            valueSymbols.Build(),
             targetConditions,
             links.Warnings);
 
@@ -854,34 +900,87 @@ public sealed class MSBuildProjectTranslator
         {
             if (string.IsNullOrWhiteSpace(property.Condition))
             {
-                context.Properties[property.Name] =
-                    context.ResolvePropertyExpression(property.Value);
+                context.SetProperty(
+                    property.Name,
+                    context.ResolvePropertyExpression(property.Value));
                 continue;
             }
 
             var previousValue = context.GetProperty(property.Name);
             var condition = context.TranslateCondition(property.Condition);
-            var assignedValue =
-                context.ResolvePropertyExpression(property.Value);
-            var thenAssigned = new Value<string>();
-            var thenPrevious = new Value<string>();
-            var elseAssigned = new Value<string>();
-            var elsePrevious = new Value<string>();
+            var inputs = new List<Value<string>> { previousValue };
+            var whenTrueInputs = new List<Value<string>>
+            {
+                new(),
+            };
+            var whenFalseInputs = new List<Value<string>>
+            {
+                new(),
+            };
+            var whenTrueOperations = new List<DagOperation>();
+            Value<string> whenTrueOutput;
+
+            context.CopySymbols(previousValue, whenTrueInputs[0]);
+            context.CopySymbols(previousValue, whenFalseInputs[0]);
+
+            if (TryGetReference(
+                property.Value,
+                "$(",
+                out var referencedProperty))
+            {
+                var referencedValue =
+                    context.GetProperty(referencedProperty);
+                var referencedIndex = inputs.FindIndex(
+                    value => ReferenceEquals(value, referencedValue));
+
+                if (referencedIndex < 0)
+                {
+                    referencedIndex = inputs.Count;
+                    inputs.Add(referencedValue);
+                    whenTrueInputs.Add(new Value<string>());
+                    whenFalseInputs.Add(new Value<string>());
+                    context.CopySymbols(
+                        referencedValue,
+                        whenTrueInputs[referencedIndex]);
+                    context.CopySymbols(
+                        referencedValue,
+                        whenFalseInputs[referencedIndex]);
+                }
+
+                whenTrueOutput = whenTrueInputs[referencedIndex];
+            }
+            else
+            {
+                if (ContainsReference(property.Value))
+                {
+                    throw Unsupported(
+                        $"property expression '{property.Value}'");
+                }
+
+                var constant = new ReplaceOperation<string>(
+                    whenTrueInputs[0],
+                    property.Value,
+                    context.TargetGuard);
+                whenTrueOperations.Add(constant);
+                whenTrueOutput = constant.Result;
+            }
+
             var result = new Value<string>();
+            context.AddPropertySymbol(property.Name, whenTrueOutput);
             var conditional = new ConditionalRegionOperation(
                 condition,
-                [assignedValue, previousValue],
+                inputs.Cast<Value>().ToArray(),
                 new OperationGraph(
-                    [thenAssigned, thenPrevious],
-                    [],
-                    [thenAssigned]),
+                    whenTrueInputs.Cast<Value>().ToArray(),
+                    whenTrueOperations,
+                    [whenTrueOutput]),
                 new OperationGraph(
-                    [elseAssigned, elsePrevious],
+                    whenFalseInputs.Cast<Value>().ToArray(),
                     [],
-                    [elsePrevious]),
+                    [whenFalseInputs[0]]),
                 [result]);
             context.AddOperation(conditional);
-            context.Properties[property.Name] = result;
+            context.SetProperty(property.Name, result);
         }
     }
 
@@ -907,6 +1006,7 @@ public sealed class MSBuildProjectTranslator
         var inputs = new List<Value>();
         var whenTrueInputs = new List<Value>();
         var whenFalseInputs = new List<Value>();
+        var whenTrueOperations = new List<DagOperation>();
         var whenTrueOutputs = new List<Value>();
         var whenFalseOutputs = new List<Value>();
         var outputs = new List<Value>();
@@ -914,22 +1014,23 @@ public sealed class MSBuildProjectTranslator
 
         foreach (var property in propertyGroup.Properties)
         {
-            var assignedValue =
-                context.ResolvePropertyExpression(property.Value);
             var previousValue = context.GetProperty(property.Name);
-            var whenTrueAssigned = new Value<string>();
             var whenTruePrevious = new Value<string>();
-            var whenFalseAssigned = new Value<string>();
             var whenFalsePrevious = new Value<string>();
+            var assignedValue = new ReplaceOperation<string>(
+                whenTruePrevious,
+                property.Value,
+                context.TargetGuard);
             var result = new Value<string>();
 
-            inputs.Add(assignedValue);
+            context.CopySymbols(previousValue, whenTruePrevious);
+            context.CopySymbols(previousValue, whenFalsePrevious);
+            context.AddPropertySymbol(property.Name, assignedValue.Result);
             inputs.Add(previousValue);
-            whenTrueInputs.Add(whenTrueAssigned);
             whenTrueInputs.Add(whenTruePrevious);
-            whenFalseInputs.Add(whenFalseAssigned);
             whenFalseInputs.Add(whenFalsePrevious);
-            whenTrueOutputs.Add(whenTrueAssigned);
+            whenTrueOperations.Add(assignedValue);
+            whenTrueOutputs.Add(assignedValue.Result);
             whenFalseOutputs.Add(whenFalsePrevious);
             outputs.Add(result);
             properties.Add((property.Name, result));
@@ -940,7 +1041,7 @@ public sealed class MSBuildProjectTranslator
             inputs,
             new OperationGraph(
                 whenTrueInputs,
-                [],
+                whenTrueOperations,
                 whenTrueOutputs),
             new OperationGraph(
                 whenFalseInputs,
@@ -951,7 +1052,7 @@ public sealed class MSBuildProjectTranslator
 
         foreach (var property in properties)
         {
-            context.Properties[property.Name] = property.Result;
+            context.SetProperty(property.Name, property.Result);
         }
     }
 
@@ -981,6 +1082,7 @@ public sealed class MSBuildProjectTranslator
 
             var existingItems = context.GetItems(item.ItemType);
             var appendedItems = context.ResolveItemsExpression(item.Include);
+            context.AddItemSymbol(item.ItemType, appendedItems);
 
             if (!string.IsNullOrWhiteSpace(item.Exclude))
             {
@@ -1000,7 +1102,7 @@ public sealed class MSBuildProjectTranslator
                 context.TargetGuard);
 
             context.AddOperation(concat);
-            context.Items[item.ItemType] = concat.Result;
+            context.SetItems(item.ItemType, concat.Result);
         }
     }
 
@@ -1055,7 +1157,7 @@ public sealed class MSBuildProjectTranslator
                 throw Unsupported("ToyCompile outputs other than Assembly properties");
             }
 
-            context.Properties[propertyOutput.PropertyName] = compile.Assembly;
+            context.SetProperty(propertyOutput.PropertyName, compile.Assembly);
         }
     }
 
@@ -1182,7 +1284,8 @@ public sealed class MSBuildProjectTranslator
     {
         public TranslationContext(
             IReadOnlyDictionary<string, Value<string>> properties,
-            IReadOnlyDictionary<string, Value<IReadOnlyList<string>>> items)
+            IReadOnlyDictionary<string, Value<IReadOnlyList<string>>> items,
+            ValueSymbolTableBuilder valueSymbols)
         {
             Properties = new Dictionary<string, Value<string>>(
                 properties,
@@ -1191,17 +1294,43 @@ public sealed class MSBuildProjectTranslator
                 new Dictionary<string, Value<IReadOnlyList<string>>>(
                     items,
                     StringComparer.OrdinalIgnoreCase);
+            ValueSymbols = valueSymbols;
         }
 
         public Dictionary<string, Value<string>> Properties { get; }
 
         public Dictionary<string, Value<IReadOnlyList<string>>> Items { get; }
 
+        private ValueSymbolTableBuilder ValueSymbols { get; }
+
         public Value<OrderToken>? CurrentOrderToken { get; private set; }
 
         public Value<GuardToken>? TargetGuard { get; private set; }
 
         public List<DagOperation> Operations { get; } = [];
+
+        public void AddPropertySymbol(string name, Value value) =>
+            ValueSymbols.Add(value, $"$({name})");
+
+        public void AddItemSymbol(string name, Value value) =>
+            ValueSymbols.Add(value, $"@({name})");
+
+        public void CopySymbols(Value source, Value target) =>
+            ValueSymbols.Copy(source, target);
+
+        public void SetProperty(string name, Value<string> value)
+        {
+            Properties[name] = value;
+            AddPropertySymbol(name, value);
+        }
+
+        public void SetItems(
+            string name,
+            Value<IReadOnlyList<string>> value)
+        {
+            Items[name] = value;
+            AddItemSymbol(name, value);
+        }
 
         public void SetTargetGuard(Value<GuardToken> guard) =>
             TargetGuard = guard;
@@ -1344,4 +1473,60 @@ public sealed class MSBuildProjectTranslator
         expression.Contains("$(", StringComparison.Ordinal) ||
         expression.Contains("@(", StringComparison.Ordinal) ||
         expression.Contains("%(", StringComparison.Ordinal);
+
+    private sealed class ValueSymbolTableBuilder
+    {
+        private readonly Dictionary<Value, List<ValueSymbol>> _symbols =
+            new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<string, int> _nextVersions =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        public void Add(Value value, string symbol)
+        {
+            if (!_symbols.TryGetValue(value, out var symbols))
+            {
+                symbols = [];
+                _symbols.Add(value, symbols);
+            }
+
+            if (symbols.Any(
+                existing => existing.Name.Equals(
+                    symbol,
+                    StringComparison.OrdinalIgnoreCase)))
+            {
+                return;
+            }
+
+            var version = _nextVersions.GetValueOrDefault(symbol);
+            symbols.Add(new ValueSymbol(symbol, version));
+            _nextVersions[symbol] = version + 1;
+        }
+
+        public void Copy(Value source, Value target)
+        {
+            if (!_symbols.TryGetValue(source, out var symbols))
+            {
+                return;
+            }
+
+            foreach (var symbol in symbols)
+            {
+                Add(target, symbol.Name);
+            }
+        }
+
+        public IReadOnlyDictionary<Value, IReadOnlyList<ValueSymbol>> Build()
+        {
+            var result =
+                new Dictionary<Value, IReadOnlyList<ValueSymbol>>(
+                    ReferenceEqualityComparer.Instance);
+
+            foreach (var (value, symbols) in _symbols)
+            {
+                result.Add(value, symbols.ToArray());
+            }
+
+            return result;
+        }
+    }
 }

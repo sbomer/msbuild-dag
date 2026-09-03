@@ -100,11 +100,30 @@ public sealed class BuildProgramExecutor
                 await EnsureAsync(preludeTarget);
             }
 
+            for (var index = 0; index < target.Inputs.Count; index++)
+            {
+                if (!ReferenceEquals(
+                    target.Inputs[index],
+                    target.Body.Inputs[index]))
+                {
+                    _values.Copy(
+                        target.Inputs[index],
+                        target.Body.Inputs[index]);
+                }
+            }
+
             await _operationExecutor.ExecuteAsync(
                 target.Body,
                 _values,
                 _executeOperation,
                 cancellationToken);
+
+            for (var index = 0; index < target.Outputs.Count; index++)
+            {
+                _values.Copy(
+                    target.Body.Outputs[index],
+                    target.Outputs[index]);
+            }
 
             foreach (var epilogueTarget in target.Epilogue)
             {

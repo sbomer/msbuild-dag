@@ -1,0 +1,13 @@
+<Project>
+  <PropertyGroup>
+    <UseCopiedValue>true</UseCopiedValue>
+    <X>Old</X>
+    <Y>New</Y>
+  </PropertyGroup>
+
+  <Target Name="Build">
+    <PropertyGroup>
+      <X Condition="'$(UseCopiedValue)' == 'true'">$(Y)</X>
+    </PropertyGroup>
+  </Target>
+</Project>

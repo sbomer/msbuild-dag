@@ -5,26 +5,27 @@ public sealed class BuildProgramTests
     [Fact]
     public void DerivesTargetPredecessorThroughExportedValue()
     {
-        var value = new Value<string>();
-        var producer = new TestOperation([], [value]);
-        var consumer = new TestOperation([value], []);
+        var bodyOutput = new Value<string>();
+        var producer = new TestOperation([], [bodyOutput]);
         var producingTarget = new Target(
-            [],
-            [value],
             new OperationGraph([producer]));
+        var exportedValue = Assert.Single(producingTarget.Outputs);
+        var bodyInput = new Value<string>();
+        var consumer = new TestOperation([bodyInput], []);
         var consumingTarget = new Target(
-            [value],
             [],
-            new OperationGraph([consumer]));
+            [exportedValue],
+            new OperationGraph([bodyInput], [consumer], []),
+            []);
 
         var program = new BuildProgram([producingTarget, consumingTarget]);
 
-        Assert.Same(producingTarget, program.GetProducer(value));
+        Assert.Same(producingTarget, program.GetProducer(exportedValue));
         Assert.Equal([producingTarget], program.GetPredecessors(consumingTarget));
     }
 
     [Fact]
-    public void TargetUsesItsBodySignature()
+    public void TargetUsesDistinctSymmetricBoundaryValues()
     {
         var input = new Value<string>();
         var output = new Value<string>();
@@ -36,8 +37,12 @@ public sealed class BuildProgramTests
 
         var target = new Target(body);
 
-        Assert.Same(body.Inputs, target.Inputs);
-        Assert.Same(body.Outputs, target.Outputs);
+        Assert.Single(target.Inputs);
+        Assert.Single(target.Outputs);
+        Assert.NotSame(body.Inputs[0], target.Inputs[0]);
+        Assert.NotSame(body.Outputs[0], target.Outputs[0]);
+        Assert.Equal(body.Inputs[0].GetType(), target.Inputs[0].GetType());
+        Assert.Equal(body.Outputs[0].GetType(), target.Outputs[0].GetType());
     }
 
     [Fact]
@@ -120,15 +125,89 @@ public sealed class BuildProgramTests
     }
 
     [Fact]
-    public void RejectsTargetPassingInputThroughAsOutput()
+    public void AllowsTargetPassingInputThroughAsDistinctOutput()
     {
         var value = new Value<string>();
         var body = new OperationGraph([value], [], [value]);
 
-        var exception = Assert.Throws<ArgumentException>(
-            () => new Target(body));
+        var target = new Target(body);
 
-        Assert.Contains("produced inside", exception.Message);
+        Assert.NotSame(target.Inputs[0], value);
+        Assert.NotSame(value, target.Outputs[0]);
+        Assert.NotSame(target.Inputs[0], target.Outputs[0]);
+    }
+
+    [Fact]
+    public void AllowsTargetToExportBodyParameterBoundFromExternalInput()
+    {
+        var external = new Value<string>();
+        var parameter = new Value<string>();
+        var body = new OperationGraph([parameter], [], [parameter]);
+
+        var target = new Target([], [external], body, []);
+
+        Assert.Equal([external], target.Inputs);
+        Assert.Equal([parameter], target.Body.Inputs);
+        Assert.Equal([parameter], target.Body.Outputs);
+        Assert.NotSame(parameter, Assert.Single(target.Outputs));
+    }
+
+    [Fact]
+    public void RejectsTargetInputBindingWithDifferentType()
+    {
+        var external = new Value<int>();
+        var parameter = new Value<string>();
+        var body = new OperationGraph([parameter], [], []);
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => new Target(
+                [],
+                [external],
+                body,
+                [new Value<string>()],
+                []));
+
+        Assert.Contains("same type", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsTargetOutputBindingWithDifferentType()
+    {
+        var bodyOutput = new Value<string>();
+        var body = new OperationGraph(
+            [],
+            [new TestOperation([], [bodyOutput])],
+            [bodyOutput]);
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => new Target(
+                [],
+                [],
+                body,
+                [new Value<int>()],
+                []));
+
+        Assert.Contains("same type", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsSharedBodyAndExternalBoundaryValue()
+    {
+        var bodyOutput = new Value<string>();
+        var body = new OperationGraph(
+            [],
+            [new TestOperation([], [bodyOutput])],
+            [bodyOutput]);
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => new Target(
+                [],
+                [],
+                body,
+                [bodyOutput],
+                []));
+
+        Assert.Contains("distinct", exception.Message);
     }
 
     [Fact]
@@ -138,13 +217,15 @@ public sealed class BuildProgramTests
         var producer = new TestOperation([], [value]);
         var consumer = new TestOperation([value], []);
         var producingTarget = new Target(
-            [],
-            [],
             new OperationGraph([producer]));
+        var unexportedValue = value;
+        var bodyInput = new Value<string>();
+        var consumingOperation = new TestOperation([bodyInput], []);
         var consumingTarget = new Target(
-            [value],
             [],
-            new OperationGraph([consumer]));
+            [unexportedValue],
+            new OperationGraph([bodyInput], [consumingOperation], []),
+            []);
 
         var exception = Assert.Throws<ArgumentException>(
             () => new BuildProgram([producingTarget, consumingTarget]));
@@ -157,21 +238,21 @@ public sealed class BuildProgramTests
     {
         var value = new Value<string>();
         var producer = new TestOperation([], [value]);
-        var consumer = new TestOperation([value], []);
-        var first = new Target(
-            [],
-            [value],
-            new OperationGraph([producer]));
+        var first = new Target(new OperationGraph([producer]));
+        var exportedValue = Assert.Single(first.Outputs);
+        var bodyInput = new Value<string>();
+        var consumer = new TestOperation([bodyInput], []);
         var second = new Target(
-            [value],
             [],
-            new OperationGraph([consumer]));
+            [exportedValue],
+            new OperationGraph([bodyInput], [consumer], []),
+            []);
 
         var orderedFirst = new Target(
             [second],
-            [],
-            [value],
-            new OperationGraph([producer]),
+            first.Inputs,
+            first.Body,
+            first.Outputs,
             []);
 
         var exception = Assert.Throws<ArgumentException>(

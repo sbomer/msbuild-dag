@@ -28,7 +28,8 @@ internal sealed class BuildProgramRenderingAdapter
         BuildProgram program,
         IReadOnlyDictionary<Target, string>? targetNames,
         bool includeTargetBodies = false,
-        Func<Operation, string?>? operationLabelProvider = null)
+        Func<Operation, string?>? operationLabelProvider = null,
+        Func<Value, string?>? valueLabelProvider = null)
     {
         var inputs = new Dictionary<Target, List<(Value Value, int? Port)>>(
             ReferenceEqualityComparer.Instance);
@@ -120,7 +121,10 @@ internal sealed class BuildProgramRenderingAdapter
             {
                 contents.Add(
                     operation,
-                    RenderBody(target, operationLabelProvider));
+                    RenderBody(
+                        target,
+                        operationLabelProvider,
+                        valueLabelProvider));
             }
         }
 
@@ -132,8 +136,12 @@ internal sealed class BuildProgramRenderingAdapter
 
     private static GraphNodeContent RenderBody(
         Target target,
-        Func<Operation, string?>? operationLabelProvider) =>
-        AsciiGraphWriter.RenderTargetBody(target, operationLabelProvider);
+        Func<Operation, string?>? operationLabelProvider,
+        Func<Value, string?>? valueLabelProvider) =>
+        AsciiGraphWriter.RenderTargetBody(
+            target,
+            operationLabelProvider,
+            valueLabelProvider);
 
     private sealed class TargetNodeOperation(
         IReadOnlyList<Value> inputs,

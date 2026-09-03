@@ -40,12 +40,18 @@ internal sealed class TargetBodyRenderingAdapter
 
     public static TargetBodyRenderingAdapter Create(
         Target target,
-        Func<Operation, string?>? labelProvider) =>
-        Create(target.Body, labelProvider, labelBoundaries: false);
+        Func<Operation, string?>? labelProvider,
+        Func<Value, string?>? valueLabelProvider) =>
+        Create(
+            target.Body,
+            labelProvider,
+            valueLabelProvider,
+            labelBoundaries: false);
 
     public static TargetBodyRenderingAdapter Create(
         OperationGraph graph,
         Func<Operation, string?>? labelProvider,
+        Func<Value, string?>? valueLabelProvider,
         bool labelBoundaries,
         int inputLabelOffset = 0)
     {
@@ -65,9 +71,11 @@ internal sealed class TargetBodyRenderingAdapter
             inputs.Add(input);
             labels.Add(
                 input,
-                labelBoundaries
-                    ? $"i{index + inputLabelOffset}"
-                    : string.Empty);
+                CreateBoundaryLabel(
+                    labelBoundaries
+                        ? $"i{index + inputLabelOffset}"
+                        : null,
+                    valueLabelProvider?.Invoke(graph.Inputs[index])));
         }
 
         operations.AddRange(graph.Operations);
@@ -79,7 +87,9 @@ internal sealed class TargetBodyRenderingAdapter
             outputs.Add(output);
             labels.Add(
                 output,
-                labelBoundaries ? $"o{index}" : string.Empty);
+                CreateBoundaryLabel(
+                    labelBoundaries ? $"o{index}" : null,
+                    symbol: null));
         }
 
         return new TargetBodyRenderingAdapter(
@@ -89,6 +99,17 @@ internal sealed class TargetBodyRenderingAdapter
             inputs,
             outputs);
     }
+
+    private static string CreateBoundaryLabel(
+        string? port,
+        string? symbol) =>
+        (port, symbol) switch
+        {
+            (not null, not null) => $"{port} {symbol}",
+            (not null, null) => port,
+            (null, not null) => symbol,
+            _ => string.Empty,
+        };
 
     private static string GetTypeDisplayName(Type type)
     {

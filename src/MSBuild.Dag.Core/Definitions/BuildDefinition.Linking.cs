@@ -31,12 +31,14 @@ public sealed partial class BuildDefinition
 
         var linkedBodies = new Dictionary<TargetDefinition, LinkedTargetBody>(
             ReferenceEqualityComparer.Instance);
+        var exports =
+            new Dictionary<TargetDefinition, IReadOnlyDictionary<Value, Value>>(
+                ReferenceEqualityComparer.Instance);
 
         foreach (var target in linkOrder)
         {
-            var bindings = new List<Operation>();
-            var inputs = new HashSet<Value>(
-                ReferenceEqualityComparer.Instance);
+            var inputs = new List<Value>(target.Reads.Count);
+            var parameters = new List<Value>(target.Reads.Count);
 
             foreach (var read in target.Reads)
             {
@@ -44,17 +46,45 @@ public sealed partial class BuildDefinition
                     target,
                     read.Location,
                     linkOrder,
-                    orderPredecessors);
-                bindings.Add(read.CreateBinding(source));
+                    orderPredecessors,
+                    exports);
                 inputs.Add(source);
+                parameters.Add(read.Value);
             }
 
+            var bodyOutputs = new List<Value>(target.Outputs);
+
+            foreach (var write in target.Writes)
+            {
+                if (!bodyOutputs.Contains(
+                    write.Value,
+                    ReferenceEqualityComparer.Instance))
+                {
+                    bodyOutputs.Add(write.Value);
+                }
+            }
+
+            var externalOutputs = bodyOutputs
+                .Select(output => output.CreateSibling())
+                .ToArray();
+            var targetExports = new Dictionary<Value, Value>(
+                ReferenceEqualityComparer.Instance);
+
+            for (var index = 0; index < bodyOutputs.Count; index++)
+            {
+                targetExports.Add(bodyOutputs[index], externalOutputs[index]);
+            }
+
+            exports.Add(target, targetExports);
             linkedBodies.Add(
                 target,
                 new LinkedTargetBody(
                     inputs.ToArray(),
                     new OperationGraph(
-                        bindings.Concat(target.Body.Operations).ToArray())));
+                        parameters,
+                        target.Body.Operations,
+                        bodyOutputs),
+                    externalOutputs));
         }
 
         var linkedTargets = new Dictionary<TargetDefinition, Target>(
@@ -87,17 +117,11 @@ public sealed partial class BuildDefinition
             }
 
             var linkedBody = linkedBodies[definition];
-            var outputs = new HashSet<Value>(
-                definition.Outputs,
-                ReferenceEqualityComparer.Instance);
-            outputs.UnionWith(
-                definition.Writes.Select(write => write.Value));
             var target = new Target(
                 definition.Prelude.Select(CreateTarget).ToArray(),
-                new OperationGraph(
-                    linkedBody.Inputs,
-                    linkedBody.Graph.Operations,
-                    outputs.ToArray()),
+                linkedBody.Inputs,
+                linkedBody.Graph,
+                linkedBody.Outputs,
                 definition.Epilogue.Select(CreateTarget).ToArray());
             linkedTargets.Add(definition, target);
             return target;
@@ -352,7 +376,10 @@ public sealed partial class BuildDefinition
         StateLocation location,
         IReadOnlyList<TargetDefinition> linkOrder,
         IReadOnlyDictionary<TargetDefinition, IReadOnlySet<TargetDefinition>>
-            orderPredecessors)
+            orderPredecessors,
+        IReadOnlyDictionary<
+            TargetDefinition,
+            IReadOnlyDictionary<Value, Value>> exports)
     {
         TargetDefinition? writer = null;
 
@@ -373,8 +400,9 @@ public sealed partial class BuildDefinition
 
         if (writer is not null)
         {
-            return writer.Writes.Single(
+            var bodyValue = writer.Writes.Single(
                 write => ReferenceEquals(write.Location, location)).Value;
+            return exports[writer][bodyValue];
         }
 
         return Evaluation.GetInitialization(location)?.InitialValue.Value ??

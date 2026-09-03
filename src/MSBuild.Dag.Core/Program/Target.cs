@@ -3,7 +3,12 @@ namespace MSBuild.Dag.Core;
 public sealed partial class Target
 {
     public Target(OperationGraph body)
-        : this([], body, [])
+        : this(
+            [],
+            CreateBoundaryValues(body.Inputs),
+            body,
+            CreateBoundaryValues(body.Outputs),
+            [])
     {
     }
 
@@ -11,21 +16,63 @@ public sealed partial class Target
         IReadOnlyList<Target> prelude,
         OperationGraph body,
         IReadOnlyList<Target> epilogue)
+        : this(
+            prelude,
+            CreateBoundaryValues(body.Inputs),
+            body,
+            CreateBoundaryValues(body.Outputs),
+            epilogue)
+    {
+    }
+
+    public Target(
+        IReadOnlyList<Target> prelude,
+        IReadOnlyList<Value> inputs,
+        OperationGraph body,
+        IReadOnlyList<Target> epilogue)
+        : this(
+            prelude,
+            inputs,
+            body,
+            CreateBoundaryValues(body.Outputs),
+            epilogue)
+    {
+    }
+
+    public Target(
+        IReadOnlyList<Target> prelude,
+        IReadOnlyList<Value> inputs,
+        OperationGraph body,
+        IReadOnlyList<Value> outputs,
+        IReadOnlyList<Target> epilogue)
     {
         ArgumentNullException.ThrowIfNull(prelude);
+        ArgumentNullException.ThrowIfNull(inputs);
         ArgumentNullException.ThrowIfNull(body);
+        ArgumentNullException.ThrowIfNull(outputs);
         ArgumentNullException.ThrowIfNull(epilogue);
 
         Prelude = CopyTargets(prelude, nameof(prelude));
         Body = body;
-        Inputs = body.Inputs;
-        Outputs = body.Outputs;
+        Inputs = CopyBoundaryValues(inputs, nameof(inputs));
+        Outputs = CopyBoundaryValues(outputs, nameof(outputs));
         Epilogue = CopyTargets(epilogue, nameof(epilogue));
 
-        _inputs = CreateValueSet(Inputs, nameof(body));
-        _outputs = CreateValueSet(Outputs, nameof(body));
+        ValidateBoundaryBindings(
+            Inputs,
+            Body.Inputs,
+            "input",
+            nameof(inputs));
+        ValidateBoundaryBindings(
+            Outputs,
+            Body.Outputs,
+            "output",
+            nameof(outputs));
 
-        ValidateOutputs();
+        _inputs = new HashSet<Value>(
+            Inputs,
+            ReferenceEqualityComparer.Instance);
+        _outputs = CreateValueSet(Outputs, nameof(outputs));
     }
 
     public Target(
@@ -34,7 +81,9 @@ public sealed partial class Target
         OperationGraph body)
         : this(
             [],
+            CreateBoundaryValues(inputs),
             new OperationGraph(inputs, body.Operations, outputs),
+            CreateBoundaryValues(outputs),
             [])
     {
     }
@@ -45,28 +94,13 @@ public sealed partial class Target
         IReadOnlyList<Value> outputs,
         OperationGraph body,
         IReadOnlyList<Target> epilogue)
+        : this(
+            prelude,
+            CreateBoundaryValues(inputs),
+            CreateSignedBody(inputs, outputs, body),
+            CreateBoundaryValues(outputs),
+            epilogue)
     {
-        ArgumentNullException.ThrowIfNull(inputs);
-        ArgumentNullException.ThrowIfNull(outputs);
-        ArgumentNullException.ThrowIfNull(body);
-
-        var signedBody = new OperationGraph(
-            inputs,
-            body.Operations,
-            outputs);
-        ArgumentNullException.ThrowIfNull(prelude);
-        ArgumentNullException.ThrowIfNull(epilogue);
-
-        Prelude = CopyTargets(prelude, nameof(prelude));
-        Body = signedBody;
-        Inputs = signedBody.Inputs;
-        Outputs = signedBody.Outputs;
-        Epilogue = CopyTargets(epilogue, nameof(epilogue));
-
-        _inputs = CreateValueSet(Inputs, nameof(inputs));
-        _outputs = CreateValueSet(Outputs, nameof(outputs));
-
-        ValidateOutputs();
     }
 
     public IReadOnlyList<Target> Prelude { get; }
@@ -93,16 +127,79 @@ public sealed partial class Target
         return result;
     }
 
-    private void ValidateOutputs()
+    private static Value[] CopyBoundaryValues(
+        IReadOnlyList<Value> values,
+        string parameterName)
     {
-        foreach (var output in Outputs)
+        var result = values.ToArray();
+
+        foreach (var value in result)
         {
-            if (Body.GetProducer(output) is null)
+            ArgumentNullException.ThrowIfNull(value, parameterName);
+        }
+
+        return result;
+    }
+
+    private static Value[] CreateBoundaryValues(
+        IReadOnlyList<Value> values)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        var result = new Value[values.Count];
+
+        for (var index = 0; index < values.Count; index++)
+        {
+            ArgumentNullException.ThrowIfNull(values[index], nameof(values));
+            result[index] = values[index].CreateSibling();
+        }
+
+        return result;
+    }
+
+    private static OperationGraph CreateSignedBody(
+        IReadOnlyList<Value> inputs,
+        IReadOnlyList<Value> outputs,
+        OperationGraph body)
+    {
+        ArgumentNullException.ThrowIfNull(inputs);
+        ArgumentNullException.ThrowIfNull(outputs);
+        ArgumentNullException.ThrowIfNull(body);
+
+        return new OperationGraph(inputs, body.Operations, outputs);
+    }
+
+    private static void ValidateBoundaryBindings(
+        IReadOnlyList<Value> externalValues,
+        IReadOnlyList<Value> bodyValues,
+        string boundaryName,
+        string parameterName)
+    {
+        if (externalValues.Count != bodyValues.Count)
+        {
+            throw new ArgumentException(
+                $"A target must have one external {boundaryName} for each " +
+                $"body {boundaryName}.",
+                parameterName);
+        }
+
+        for (var index = 0; index < externalValues.Count; index++)
+        {
+            if (ReferenceEquals(externalValues[index], bodyValues[index]))
             {
                 throw new ArgumentException(
-                    "A target output must be produced inside the target.",
-                    nameof(Body));
+                    $"A target {boundaryName} must be distinct from its " +
+                    $"corresponding body {boundaryName}.",
+                    parameterName);
+            }
+
+            if (externalValues[index].GetType() != bodyValues[index].GetType())
+            {
+                throw new ArgumentException(
+                    $"Each target {boundaryName} must have the same type as " +
+                    $"its corresponding body {boundaryName}.",
+                    parameterName);
             }
         }
     }
+
 }

@@ -44,29 +44,40 @@ public sealed class MSBuildProjectTranslatorTests
             operation => operation.Content == "Debug");
         var concat = Assert.Single(
             collectSources.Body.Operations.OfType<ConcatItemsOperation>());
-        var sourcesBinding = Assert.IsAssignableFrom<IStateBindingOperation>(
-            graph.GetProducer(compile.Sources));
-        var configurationBinding =
-            Assert.IsAssignableFrom<IStateBindingOperation>(
-                graph.GetProducer(compile.Configuration));
 
-        Assert.Same(concat.Result, sourcesBinding.Source);
-        Assert.Same(compile.Assembly, result.Properties["AssemblyPath"]);
-        Assert.Same(concat.Result, result.Items["Compile"]);
-        Assert.Same(configuration.Result, result.Properties["Configuration"]);
+        Assert.Null(graph.GetProducer(compile.Sources));
+        Assert.Null(graph.GetProducer(compile.Configuration));
+        Assert.Same(
+            GetExternalOutput(collectSources, concat.Result),
+            GetExternalInput(build, compile.Sources));
+        Assert.Same(
+            GetExternalOutput(build, compile.Assembly),
+            result.Properties["AssemblyPath"]);
+        Assert.Same(
+            GetExternalOutput(collectSources, concat.Result),
+            result.Items["Compile"]);
+        Assert.Same(
+            GetExternalOutput(prepare, configuration.Result),
+            result.Properties["Configuration"]);
         Assert.Contains(
             afterBuild.Body.Operations.OfType<ConstantOperation<string>>(),
             operation => operation.Content == "true" &&
                 ReferenceEquals(
-                    operation.Result,
+                    GetExternalOutput(afterBuild, operation.Result),
                     result.Properties["AfterBuildRan"]));
-        Assert.Same(configuration.Result, configurationBinding.Source);
-        Assert.Contains(configuration.Result, prepare.Outputs);
-        Assert.Contains(configuration.Result, build.Inputs);
-        Assert.Contains(concat.Result, collectSources.Outputs);
-        Assert.Contains(concat.Result, build.Inputs);
+        Assert.Same(
+            GetExternalOutput(prepare, configuration.Result),
+            GetExternalInput(build, compile.Configuration));
+        Assert.Contains(configuration.Result, prepare.Body.Outputs);
+        Assert.Contains(
+            GetExternalOutput(prepare, configuration.Result),
+            build.Inputs);
+        Assert.Contains(concat.Result, collectSources.Body.Outputs);
+        Assert.Contains(
+            GetExternalOutput(collectSources, concat.Result),
+            build.Inputs);
 
-        Assert.Equal(2, graph.GetDependencies(compile).Count);
+        Assert.Empty(graph.GetDependencies(compile));
         Assert.Null(configuration.Guard);
         Assert.Equal([configuration.Result], configuration.Outputs);
 
@@ -166,12 +177,15 @@ public sealed class MSBuildProjectTranslatorTests
             operation => operation.Content == "Debug");
         var compile = Assert.Single(
             build.Body.Operations.OfType<ToyCompileOperation>());
-        var binding = Assert.IsAssignableFrom<IStateBindingOperation>(
-            build.Body.GetProducer(compile.Configuration));
 
-        Assert.Same(configuration.Result, binding.Source);
-        Assert.Contains(configuration.Result, prepare.Outputs);
-        Assert.Contains(configuration.Result, build.Inputs);
+        Assert.Null(build.Body.GetProducer(compile.Configuration));
+        Assert.Same(
+            GetExternalOutput(prepare, configuration.Result),
+            GetExternalInput(build, compile.Configuration));
+        Assert.Contains(configuration.Result, prepare.Body.Outputs);
+        Assert.Contains(
+            GetExternalOutput(prepare, configuration.Result),
+            build.Inputs);
     }
 
     [Fact]
@@ -187,14 +201,15 @@ public sealed class MSBuildProjectTranslatorTests
             second.Body.Operations.OfType<ConstantOperation<string>>());
         var compile = Assert.Single(
             build.Body.Operations.OfType<ToyCompileOperation>());
-        var binding = Assert.IsAssignableFrom<IStateBindingOperation>(
-            build.Body.GetProducer(compile.Configuration));
 
         Assert.Equal("First", firstConfiguration.Content);
         Assert.Equal("Second", secondConfiguration.Content);
-        Assert.Same(secondConfiguration.Result, binding.Source);
+        Assert.Null(build.Body.GetProducer(compile.Configuration));
         Assert.Same(
-            secondConfiguration.Result,
+            GetExternalOutput(second, secondConfiguration.Result),
+            GetExternalInput(build, compile.Configuration));
+        Assert.Same(
+            GetExternalOutput(second, secondConfiguration.Result),
             result.Properties["Configuration"]);
     }
 
@@ -203,13 +218,14 @@ public sealed class MSBuildProjectTranslatorTests
     {
         var result = TranslateAsset("PropertyCopy.proj", "Build");
         var prepare = result.Targets["Prepare"];
-        var binding = Assert.Single(
-            prepare.Body.Operations.OfType<IStateBindingOperation>());
+        var parameter = Assert.Single(prepare.Body.Inputs);
 
+        Assert.Empty(prepare.Body.Operations);
         Assert.Same(
-            binding.Result,
+            GetExternalOutput(prepare, parameter),
             result.Properties["Configuration"]);
-        Assert.Contains(binding.Result, prepare.Outputs);
+        Assert.Contains(parameter, prepare.Body.Outputs);
+        Assert.NotSame(Assert.Single(prepare.Inputs), parameter);
     }
 
     [Fact]
@@ -221,9 +237,9 @@ public sealed class MSBuildProjectTranslatorTests
             build.Body.Operations.OfType<ExpandItemsExpressionOperation>());
         var exclusion = Assert.Single(
             build.Body.Operations.OfType<ExcludeItemsOperation>());
-        var binding = Assert.IsAssignableFrom<IStateBindingOperation>(
-            build.Body.GetProducer(expansion.Source));
         var values = new ValueStore();
+
+        Assert.Null(build.Body.GetProducer(expansion.Source));
 
         await new BuildProgramExecutor(
             result.Program,
@@ -244,7 +260,7 @@ public sealed class MSBuildProjectTranslatorTests
                     result.TargetDefinitions["Build"].Reads
                         .OfType<StateRead<string>>()
                         .Single().Location)).InitialValue.Value,
-            binding.Source);
+            GetExternalInput(build, expansion.Source));
         Assert.Equal(
             ["clr", "libs", "native"],
             values.Get(result.Items["SpecifiedSubsetName"]));
@@ -277,18 +293,13 @@ public sealed class MSBuildProjectTranslatorTests
         var buildCompile = Assert.Single(
             result.Targets["Build"].Body.Operations
                 .OfType<ToyCompileOperation>());
-        var configurationBinding =
-            Assert.IsAssignableFrom<IStateBindingOperation>(
-                result.Targets["Build"].Body.GetProducer(
-                    buildCompile.Configuration));
-        var sourcesBinding = Assert.IsAssignableFrom<IStateBindingOperation>(
-            result.Targets["Build"].Body.GetProducer(buildCompile.Sources));
+        var build = result.Targets["Build"];
 
         Assert.Same(
-            configurationBinding.Source,
+            GetExternalInput(build, buildCompile.Configuration),
             result.Properties["Configuration"]);
         Assert.Same(
-            sourcesBinding.Source,
+            GetExternalInput(build, buildCompile.Sources),
             result.Items["Compile"]);
     }
 
@@ -314,6 +325,9 @@ public sealed class MSBuildProjectTranslatorTests
         var build = result.Targets["Build"];
         var conditional = Assert.Single(
             build.Body.Operations.OfType<ConditionalRegionOperation>());
+        var assignedValue = Assert.Single(
+            conditional.WhenTrue.Operations
+                .OfType<ReplaceOperation<string>>());
         var values = new ValueStore();
 
         await new BuildProgramExecutor(
@@ -323,11 +337,63 @@ public sealed class MSBuildProjectTranslatorTests
             .ExecuteAsync(build);
 
         Assert.Same(
+            GetExternalOutput(build, conditional.Outputs[0]),
+            result.Properties["Configuration"]);
+        Assert.NotSame(
             conditional.Outputs[0],
             result.Properties["Configuration"]);
+        var bodySymbol = Assert.Single(
+            result.ValueSymbols[conditional.Outputs[0]]);
+        var exportedSymbol = Assert.Single(
+            result.ValueSymbols[result.Properties["Configuration"]]);
+        Assert.Equal(bodySymbol.Name, exportedSymbol.Name);
+        Assert.NotEqual(bodySymbol.Version, exportedSymbol.Version);
+        Assert.Equal("Debug", assignedValue.Content);
+        Assert.Same(
+            conditional.WhenTrue.Inputs[0],
+            assignedValue.Previous);
+        Assert.DoesNotContain(
+            build.Body.Operations,
+            operation => operation is ConstantOperation<string>
+            {
+                Content: "Debug",
+            });
+        Assert.Empty(conditional.WhenFalse.Operations);
+        Assert.Single(conditional.WhenTrue.Inputs);
+        Assert.Single(conditional.WhenFalse.Inputs);
         Assert.Equal(
             expectedConfiguration,
             values.Get(result.Properties["Configuration"]));
+    }
+
+    [Fact]
+    public async Task ConditionalPropertyReferenceUsesBranchParameter()
+    {
+        var result = TranslateAsset(
+            "ConditionalPropertyReference.proj",
+            "Build");
+        var build = result.Targets["Build"];
+        var conditional = Assert.Single(
+            build.Body.Operations.OfType<ConditionalRegionOperation>());
+        var values = new ValueStore();
+
+        await new BuildProgramExecutor(
+            result.Program,
+            values,
+            CreateEvaluator().EvaluateAsync)
+            .ExecuteAsync(build);
+
+        Assert.Equal(2, conditional.WhenTrue.Inputs.Count);
+        Assert.Equal(2, conditional.WhenFalse.Inputs.Count);
+        Assert.Empty(conditional.WhenTrue.Operations);
+        Assert.Empty(conditional.WhenFalse.Operations);
+        Assert.Same(
+            conditional.WhenTrue.Inputs[1],
+            conditional.WhenTrue.Outputs[0]);
+        Assert.Same(
+            conditional.WhenFalse.Inputs[0],
+            conditional.WhenFalse.Outputs[0]);
+        Assert.Equal("New", values.Get(result.Properties["X"]));
     }
 
     [Theory]
@@ -342,8 +408,8 @@ public sealed class MSBuildProjectTranslatorTests
         var build = result.Targets["Build"];
         var conditional = Assert.Single(
             build.Body.Operations.OfType<ConditionalRegionOperation>());
-        var assignedValues = build.Body.Operations
-            .OfType<ConstantOperation<string>>()
+        var assignedValues = conditional.WhenTrue.Operations
+            .OfType<ReplaceOperation<string>>()
             .Where(operation => operation.Content is "A" or "B")
             .ToArray();
         var values = new ValueStore();
@@ -359,6 +425,41 @@ public sealed class MSBuildProjectTranslatorTests
         Assert.All(
             assignedValues,
             operation => Assert.IsNotAssignableFrom<IOrderedOperation>(operation));
+        Assert.Equal(
+            conditional.WhenTrue.Inputs,
+            assignedValues.Select(operation => operation.Previous).ToArray());
+        Assert.Equal(
+            ["$(X)", "$(Y)"],
+            conditional.WhenTrue.Inputs
+                .Select(value => Assert.Single(result.ValueSymbols[value]).Name)
+                .ToArray());
+        Assert.Equal(
+            ["$(X)", "$(Y)"],
+            conditional.WhenFalse.Inputs
+                .Select(value => Assert.Single(result.ValueSymbols[value]).Name)
+                .ToArray());
+        Assert.Equal(
+            ["$(X)", "$(Y)"],
+            conditional.Outputs
+                .Select(value => Assert.Single(result.ValueSymbols[value]).Name)
+                .ToArray());
+        Assert.Equal(
+            3,
+            conditional.WhenTrue.Inputs
+                .Concat(conditional.WhenFalse.Inputs)
+                .Append(conditional.Outputs[0])
+                .SelectMany(value => result.ValueSymbols[value])
+                .Where(symbol => symbol.Name == "$(X)")
+                .Select(symbol => symbol.Version)
+                .Distinct()
+                .Count());
+        Assert.DoesNotContain(
+            build.Body.Operations,
+            operation => operation is ConstantOperation<string>
+            {
+                Content: "A" or "B",
+            });
+        Assert.Empty(conditional.WhenFalse.Operations);
         Assert.Equal(expectedX, values.Get(result.Properties["X"]));
         Assert.Equal(expectedY, values.Get(result.Properties["Y"]));
     }
@@ -528,7 +629,7 @@ public sealed class MSBuildProjectTranslatorTests
             graph.Operations.OfType<NotEqualOperation<string>>());
 
         Assert.Same(comparison.Result, result.TargetConditions["Build"]);
-        Assert.Equal(2, graph.GetDependencies(comparison).Count);
+        Assert.Single(graph.GetDependencies(comparison));
     }
 
     [Fact]
@@ -541,8 +642,6 @@ public sealed class MSBuildProjectTranslatorTests
             .ToArray();
         var first = messages[0];
         var second = messages[1];
-        var textBinding = Assert.IsAssignableFrom<IStateBindingOperation>(
-            build.Body.GetProducer(first.Text));
         var importance = Assert.IsType<ConstantOperation<string>>(
             build.Body.GetProducer(first.Importance));
         var defaultImportance = Assert.IsType<ConstantOperation<string>>(
@@ -571,7 +670,7 @@ public sealed class MSBuildProjectTranslatorTests
                     initialization.Location,
                     result.TargetDefinitions["Build"].Reads
                         .Single().Location)).InitialValue.Value,
-            textBinding.Source);
+            GetExternalInput(build, first.Text));
         Assert.Equal("High", importance.Content);
         Assert.Equal("normal", defaultImportance.Content);
         Assert.Equal(
@@ -610,6 +709,12 @@ public sealed class MSBuildProjectTranslatorTests
         Action<MessageOperation, ValueStore>? onMessage = null) =>
         new OperationEvaluator()
             .Add<ConstantOperation<string>>(
+                static (operation, values, _) =>
+                {
+                    values.Set(operation.Result, operation.Content);
+                    return ValueTask.CompletedTask;
+                })
+            .Add<ReplaceOperation<string>>(
                 static (operation, values, _) =>
                 {
                     values.Set(operation.Result, operation.Content);
@@ -701,6 +806,38 @@ public sealed class MSBuildProjectTranslatorTests
                             $"references missing target " +
                             $"'{operation.MissingTargetName}' through " +
                             $"{operation.AttributeName}.")));
+
+    private static Value GetExternalInput(
+        Target target,
+        Value bodyParameter)
+    {
+        for (var index = 0; index < target.Body.Inputs.Count; index++)
+        {
+            if (ReferenceEquals(target.Body.Inputs[index], bodyParameter))
+            {
+                return target.Inputs[index];
+            }
+        }
+
+        throw new InvalidOperationException(
+            "The value is not a target body parameter.");
+    }
+
+    private static Value GetExternalOutput(
+        Target target,
+        Value bodyResult)
+    {
+        for (var index = 0; index < target.Body.Outputs.Count; index++)
+        {
+            if (ReferenceEquals(target.Body.Outputs[index], bodyResult))
+            {
+                return target.Outputs[index];
+            }
+        }
+
+        throw new InvalidOperationException(
+            "The value is not a target body result.");
+    }
 
     private static TranslationResult TranslateAsset(
         string assetName,

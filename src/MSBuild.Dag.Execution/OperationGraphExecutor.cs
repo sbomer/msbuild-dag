@@ -82,11 +82,7 @@ public sealed class OperationGraphExecutor
                 return;
             }
 
-            if (operation is IStateBindingOperation binding)
-            {
-                values.Copy(binding.Source, binding.Result);
-            }
-            else if (operation is ISelectOperation select)
+            if (operation is ISelectOperation select)
             {
                 values.Copy(
                     values.Get(select.Condition)

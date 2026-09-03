@@ -43,13 +43,33 @@ public sealed partial class BuildLinkResult
 
             foreach (var write in target.Writes)
             {
-                state[write.Location] = write.Value;
+                var linkedTarget = Targets[target];
+                var outputIndex = IndexOfReference(
+                    linkedTarget.Body.Outputs,
+                    write.Value);
+                state[write.Location] = linkedTarget.Outputs[outputIndex];
             }
 
             foreach (var epilogueTarget in target.Epilogue)
             {
                 Ensure(epilogueTarget);
             }
+        }
+
+        static int IndexOfReference(
+            IReadOnlyList<Value> values,
+            Value expected)
+        {
+            for (var index = 0; index < values.Count; index++)
+            {
+                if (ReferenceEquals(values[index], expected))
+                {
+                    return index;
+                }
+            }
+
+            throw new InvalidOperationException(
+                "A linked state write must be a target body output.");
         }
     }
 }

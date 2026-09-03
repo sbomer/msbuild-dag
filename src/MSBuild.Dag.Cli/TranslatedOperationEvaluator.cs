@@ -14,6 +14,12 @@ internal static class TranslatedOperationEvaluator
                     values.Set(operation.Result, operation.Content);
                     return ValueTask.CompletedTask;
                 })
+            .Add<ReplaceOperation<string>>(
+                static (operation, values, _) =>
+                {
+                    values.Set(operation.Result, operation.Content);
+                    return ValueTask.CompletedTask;
+                })
             .Add<ConstantOperation<IReadOnlyList<string>>>(
                 static (operation, values, _) =>
                 {

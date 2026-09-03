@@ -36,14 +36,15 @@ public sealed class BuildDefinitionTests
 
         var linkedWriter = linked.Targets[writer];
         var linkedReader = linked.Targets[reader];
-        var binding = Assert.IsAssignableFrom<IStateBindingOperation>(
-            linkedReader.Body.GetProducer(read.Value));
+        var exportedValue = Assert.Single(linkedWriter.Outputs);
 
-        Assert.Same(writtenValue, binding.Source);
-        Assert.Contains(writtenValue, linkedWriter.Outputs);
-        Assert.Contains(writtenValue, linkedReader.Inputs);
+        Assert.Null(linkedReader.Body.GetProducer(read.Value));
+        Assert.Equal([read.Value], linkedReader.Body.Inputs);
+        Assert.Equal([exportedValue], linkedReader.Inputs);
+        Assert.Contains(writtenValue, linkedWriter.Body.Outputs);
+        Assert.NotSame(writtenValue, exportedValue);
         Assert.Same(
-            writtenValue,
+            exportedValue,
             linked.GetStateAfter(reader)[location]);
     }
 
@@ -73,11 +74,12 @@ public sealed class BuildDefinitionTests
             .Link();
 
         var linkedTarget = linked.Targets[target];
-        var binding = Assert.IsAssignableFrom<IStateBindingOperation>(
-            linkedTarget.Body.GetProducer(read.Value));
 
-        Assert.Same(initialization.InitialValue.Value, binding.Source);
-        Assert.Contains(initialization.InitialValue.Value, linkedTarget.Inputs);
+        Assert.Null(linkedTarget.Body.GetProducer(read.Value));
+        Assert.Equal([read.Value], linkedTarget.Body.Inputs);
+        Assert.Equal(
+            [initialization.InitialValue.Value],
+            linkedTarget.Inputs);
         Assert.Same(
             initialization.InitialValue.Value,
             linked.GetStateAfter(target)[location]);

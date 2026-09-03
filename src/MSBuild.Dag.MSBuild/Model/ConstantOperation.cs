@@ -25,3 +25,25 @@ public sealed class ConstantOperation<T>(
 
     public override IReadOnlyList<Value> Outputs => [Result];
 }
+
+public sealed class ReplaceOperation<T>(
+    Value<T> previous,
+    T content,
+    Value<GuardToken>? guard = null)
+    : Operation, IConstantOperation, IGuardedOperation
+{
+    public Value<T> Previous { get; } = previous;
+
+    public T Content { get; } = content;
+
+    object? IConstantOperation.Content => Content;
+
+    public Value<GuardToken>? Guard { get; } = guard;
+
+    public Value<T> Result { get; } = new();
+
+    public override IReadOnlyList<Value> Inputs =>
+        Guard is null ? [Previous] : [Guard, Previous];
+
+    public override IReadOnlyList<Value> Outputs => [Result];
+}

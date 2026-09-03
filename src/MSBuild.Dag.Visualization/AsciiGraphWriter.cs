@@ -14,7 +14,9 @@ public static class AsciiGraphWriter
             graph,
             "OperationGraph",
             labelProvider: null,
-            contentProvider: null);
+            contentProvider: null,
+            valueLabelProvider: null,
+            externalLabelProvider: null);
     }
 
     private static int GetInputPort(Operation operation, int inputIndex) =>
@@ -34,7 +36,8 @@ public static class AsciiGraphWriter
     public static string Render(
         BuildProgram program,
         IReadOnlyDictionary<Target, string>? targetNames = null,
-        Func<Operation, string?>? operationLabelProvider = null)
+        Func<Operation, string?>? operationLabelProvider = null,
+        Func<Value, string?>? valueLabelProvider = null)
     {
         ArgumentNullException.ThrowIfNull(program);
 
@@ -42,12 +45,15 @@ public static class AsciiGraphWriter
             program,
             targetNames,
             includeTargetBodies: true,
-            operationLabelProvider);
+            operationLabelProvider,
+            valueLabelProvider);
         return Render(
             adapter.Graph,
             "BuildProgram",
             adapter.GetLabel,
-            adapter.GetContent);
+            adapter.GetContent,
+            valueLabelProvider,
+            CreateInitialValueLabelProvider(program));
     }
 
     public static string RenderCompact(
@@ -61,7 +67,8 @@ public static class AsciiGraphWriter
             adapter.Graph,
             "BuildProgram",
             adapter.GetLabel,
-            contentProvider: null);
+            contentProvider: null,
+            valueLabelProvider: null);
     }
 
     public static void Write(OperationGraph graph, TextWriter writer)
@@ -71,14 +78,17 @@ public static class AsciiGraphWriter
             writer,
             "OperationGraph",
             labelProvider: null,
-            contentProvider: null);
+            contentProvider: null,
+            valueLabelProvider: null,
+            externalLabelProvider: null);
     }
 
     public static void Write(
         BuildProgram program,
         TextWriter writer,
         IReadOnlyDictionary<Target, string>? targetNames = null,
-        Func<Operation, string?>? operationLabelProvider = null)
+        Func<Operation, string?>? operationLabelProvider = null,
+        Func<Value, string?>? valueLabelProvider = null)
     {
         ArgumentNullException.ThrowIfNull(program);
 
@@ -86,13 +96,16 @@ public static class AsciiGraphWriter
             program,
             targetNames,
             includeTargetBodies: true,
-            operationLabelProvider);
+            operationLabelProvider,
+            valueLabelProvider);
         Write(
             adapter.Graph,
             writer,
             "BuildProgram",
             adapter.GetLabel,
-            adapter.GetContent);
+            adapter.GetContent,
+            valueLabelProvider,
+            CreateInitialValueLabelProvider(program));
     }
 
     public static void WriteCompact(
@@ -109,17 +122,28 @@ public static class AsciiGraphWriter
             writer,
             "BuildProgram",
             adapter.GetLabel,
-            contentProvider: null);
+            contentProvider: null,
+            valueLabelProvider: null,
+            externalLabelProvider: null);
     }
 
     internal static string Render(
         OperationGraph graph,
         string heading,
         Func<Operation, string>? labelProvider,
-        Func<Operation, GraphNodeContent?>? contentProvider)
+        Func<Operation, GraphNodeContent?>? contentProvider,
+        Func<Value, string?>? valueLabelProvider = null,
+        Func<Value, string?>? externalLabelProvider = null)
     {
         using var writer = new StringWriter(CultureInfo.InvariantCulture);
-        Write(graph, writer, heading, labelProvider, contentProvider);
+        Write(
+            graph,
+            writer,
+            heading,
+            labelProvider,
+            contentProvider,
+            valueLabelProvider,
+            externalLabelProvider);
         return writer.ToString();
     }
 
@@ -128,7 +152,9 @@ public static class AsciiGraphWriter
         TextWriter writer,
         string heading,
         Func<Operation, string>? labelProvider,
-        Func<Operation, GraphNodeContent?>? contentProvider)
+        Func<Operation, GraphNodeContent?>? contentProvider,
+        Func<Value, string?>? valueLabelProvider,
+        Func<Value, string?>? externalLabelProvider)
     {
         ArgumentNullException.ThrowIfNull(graph);
         ArgumentNullException.ThrowIfNull(writer);
@@ -141,21 +167,29 @@ public static class AsciiGraphWriter
             return;
         }
 
-        var layout = Layout.Create(graph, labelProvider, contentProvider);
+        var layout = Layout.Create(
+            graph,
+            labelProvider,
+            contentProvider,
+            valueLabelProvider: valueLabelProvider,
+            externalLabelProvider: externalLabelProvider);
         WriteLayout(layout, writer);
     }
 
     internal static GraphNodeContent RenderTargetBody(
         Target target,
-        Func<Operation, string?>? operationLabelProvider) =>
+        Func<Operation, string?>? operationLabelProvider,
+        Func<Value, string?>? valueLabelProvider) =>
         RenderSignedGraph(
             target.Body,
             operationLabelProvider,
+            valueLabelProvider,
             labelBoundaries: false);
 
     private static GraphNodeContent RenderSignedGraph(
         OperationGraph graph,
         Func<Operation, string?>? operationLabelProvider,
+        Func<Value, string?>? valueLabelProvider,
         bool labelBoundaries,
         int inputLabelOffset = 0)
     {
@@ -172,6 +206,7 @@ public static class AsciiGraphWriter
         var adapter = TargetBodyRenderingAdapter.Create(
             graph,
             operationLabelProvider,
+            valueLabelProvider,
             labelBoundaries,
             inputLabelOffset);
         var layout = Layout.Create(
@@ -179,9 +214,13 @@ public static class AsciiGraphWriter
             adapter.GetLabel,
             operation => RenderOperationContent(
                 operation,
-                operationLabelProvider),
+                operationLabelProvider,
+                valueLabelProvider),
+            valueLabelProvider,
+            externalLabelProvider: null,
             renderDanglingOutputs: false,
-            preserveBoundaryOrder: labelBoundaries);
+            preserveBoundaryOrder: labelBoundaries,
+            placeSourceOperationsAfterInputs: labelBoundaries);
         using var writer = new StringWriter(CultureInfo.InvariantCulture);
 
         WriteLayout(layout, writer);
@@ -201,23 +240,30 @@ public static class AsciiGraphWriter
 
     private static GraphNodeContent? RenderOperationContent(
         Operation operation,
-        Func<Operation, string?>? operationLabelProvider)
+        Func<Operation, string?>? operationLabelProvider,
+        Func<Value, string?>? valueLabelProvider)
     {
         if (operation is not ConditionalRegionOperation conditional)
         {
             return null;
         }
 
-        var whenTrue = RenderSignedGraph(
-            conditional.WhenTrue,
-            operationLabelProvider,
-            labelBoundaries: true,
-            inputLabelOffset: 1);
-        var whenFalse = RenderSignedGraph(
-            conditional.WhenFalse,
-            operationLabelProvider,
-            labelBoundaries: true,
-            inputLabelOffset: 1);
+        var whenTrue = ReserveTitleColumns(
+            RenderSignedGraph(
+                conditional.WhenTrue,
+                operationLabelProvider,
+                valueLabelProvider,
+                labelBoundaries: true,
+                inputLabelOffset: 1),
+            "true");
+        var whenFalse = ReserveTitleColumns(
+            RenderSignedGraph(
+                conditional.WhenFalse,
+                operationLabelProvider,
+                valueLabelProvider,
+                labelBoundaries: true,
+                inputLabelOffset: 1),
+            "false");
         var whenTrueWidth = Math.Max(
             " true ".Length,
             whenTrue.Lines.Select(static line => line.Length).DefaultIfEmpty().Max());
@@ -225,40 +271,482 @@ public static class AsciiGraphWriter
             " false ".Length,
             whenFalse.Lines.Select(static line => line.Length).DefaultIfEmpty().Max());
         var branchHeight = Math.Max(
-            whenTrue.Lines.Count,
-            whenFalse.Lines.Count);
-        var lines = new List<string>(branchHeight + 2)
+            Math.Max(0, whenTrue.Lines.Count - 1),
+            Math.Max(0, whenFalse.Lines.Count - 1));
+        var frameWidth = whenTrueWidth + whenFalseWidth + 7;
+        var dividerX = whenTrueWidth + 3;
+        var trueOrigin = 2;
+        var falseOrigin = whenTrueWidth + 5;
+        var trueBundleX = whenTrue.InputOffsets.Count == 1
+            ? trueOrigin + whenTrue.InputOffsets[0]
+            : SelectBundleX(
+                preferred: "true".Length + 4,
+                minimum: "true".Length + 3,
+                maximum: dividerX - 2,
+                whenTrue.InputOffsets
+                    .Concat(whenTrue.OutputOffsets)
+                    .Select(offset => trueOrigin + offset));
+        var falseBundleX = whenFalse.InputOffsets.Count == 1
+            ? falseOrigin + whenFalse.InputOffsets[0]
+            : SelectBundleX(
+                preferred: dividerX + "false".Length + 4,
+                minimum: dividerX + "false".Length + 3,
+                maximum: frameWidth - 3,
+                whenFalse.InputOffsets
+                    .Concat(whenFalse.OutputOffsets)
+                    .Select(offset => falseOrigin + offset));
+        var conditionX = frameWidth - 2;
+        var frameLines = new List<string>(branchHeight + 4)
         {
-            $"┌{CreateHeader("true", whenTrueWidth + 2)}" +
-            $"┬{CreateHeader("false", whenFalseWidth + 2)}┐",
+            $"┌{new string('─', whenTrueWidth + 2)}" +
+            $"┬{new string('─', whenFalseWidth + 2)}┐",
+            CreateTitleLine(),
         };
 
         for (var index = 0; index < branchHeight; index++)
         {
-            var trueLine = index < whenTrue.Lines.Count
-                ? whenTrue.Lines[index]
+            var childLineIndex = index + 1;
+            var trueLine = childLineIndex < whenTrue.Lines.Count
+                ? whenTrue.Lines[childLineIndex]
                 : string.Empty;
-            var falseLine = index < whenFalse.Lines.Count
-                ? whenFalse.Lines[index]
+            var falseLine = childLineIndex < whenFalse.Lines.Count
+                ? whenFalse.Lines[childLineIndex]
                 : string.Empty;
-            lines.Add(
+            frameLines.Add(
                 $"│ {trueLine.PadRight(whenTrueWidth)} " +
                 $"│ {falseLine.PadRight(whenFalseWidth)} │");
         }
 
-        lines.Add(
+        frameLines.Add(CreateEmptyFrameLine());
+        frameLines.Add(
             $"└{new string('─', whenTrueWidth + 2)}" +
             $"┴{new string('─', whenFalseWidth + 2)}┘");
 
-        return new GraphNodeContent(lines, [], []);
+        var dataInputCount = conditional.Inputs.Count - 1;
+        var inputRoutingHeight = dataInputCount > 0 ? 3 : 0;
+        var outputRoutingHeight = conditional.Outputs.Count > 0 ? 3 : 0;
+        var frameTop = inputRoutingHeight;
+        var localInputBusY = frameTop + 1;
+        var childTop = localInputBusY;
+        var localOutputBusY = childTop + branchHeight + 1;
+        var frameBottom = frameTop + frameLines.Count - 1;
+        var height =
+            inputRoutingHeight +
+            frameLines.Count +
+            outputRoutingHeight;
+        var canvas = new Canvas(frameLines[0].Length, height);
 
-        static string CreateHeader(string label, int width)
+        for (var index = 0; index < frameLines.Count; index++)
         {
-            var text = $" {label} ";
-            var left = (width - text.Length) / 2;
-            return new string('─', left) +
-                text +
-                new string('─', width - text.Length - left);
+            canvas.Write(0, frameTop + index, frameLines[index]);
+        }
+
+        var inputOffsets = CreateBusPortOffsets(
+            dataInputCount,
+            [trueBundleX, falseBundleX, conditionX]);
+
+        canvas.Overwrite(conditionX, 0, '│');
+
+        if (inputOffsets.Length > 0)
+        {
+            const int globalInputBusY = 1;
+            var inputBusStart = inputOffsets
+                .Append(trueBundleX)
+                .Append(falseBundleX)
+                .Min();
+            var inputBusEnd = inputOffsets
+                .Append(trueBundleX)
+                .Append(falseBundleX)
+                .Max();
+            DrawDoubleHorizontal(
+                globalInputBusY,
+                inputBusStart,
+                inputBusEnd);
+
+            foreach (var inputX in inputOffsets)
+            {
+                DrawDoubleVertical(inputX, 0, globalInputBusY - 1);
+            }
+
+            DrawInputBundle(
+                trueBundleX,
+                whenTrue.InputOffsets.Select(offset => trueOrigin + offset));
+            DrawInputBundle(
+                falseBundleX,
+                whenFalse.InputOffsets.Select(offset => falseOrigin + offset));
+
+            foreach (var x in inputOffsets
+                .Append(trueBundleX)
+                .Append(falseBundleX)
+                .Distinct())
+            {
+                canvas.Overwrite(
+                    x,
+                    globalInputBusY,
+                    GetJunction(
+                        doubleStroke: true,
+                        x,
+                        inputBusStart,
+                        inputBusEnd,
+                        up: inputOffsets.Contains(x),
+                        down: x == trueBundleX || x == falseBundleX));
+            }
+
+            void DrawInputBundle(
+                int bundleX,
+                IEnumerable<int> branchInputs)
+            {
+                var ports = branchInputs.ToArray();
+                DrawDoubleVertical(
+                    bundleX,
+                    globalInputBusY + 1,
+                    frameTop);
+                canvas.Overwrite(bundleX, frameTop, '╨');
+                canvas.DrawVertical(
+                    bundleX,
+                    frameTop + 1,
+                    localInputBusY);
+                var busStart = ports.Append(bundleX).Min();
+                var busEnd = ports.Append(bundleX).Max();
+                canvas.DrawHorizontal(
+                    localInputBusY,
+                    busStart,
+                    busEnd);
+
+                foreach (var portX in ports)
+                {
+                    if (localInputBusY < childTop)
+                    {
+                        canvas.DrawVertical(
+                            portX,
+                            localInputBusY + 1,
+                            childTop);
+                    }
+                }
+
+                canvas.Overwrite(conditionX, 1, '◆');
+
+                foreach (var x in ports.Append(bundleX).Distinct())
+                {
+                    canvas.Overwrite(
+                        x,
+                        localInputBusY,
+                        GetJunction(
+                            doubleStroke: false,
+                            x,
+                            busStart,
+                            busEnd,
+                            up: x == bundleX,
+                            down: ports.Contains(x)));
+                }
+            }
+        }
+
+        var outputOffsets = CreateBusPortOffsets(
+            conditional.Outputs.Count,
+            [trueBundleX, falseBundleX]);
+        var contentBottom = height - 1;
+
+        if (outputOffsets.Length > 0)
+        {
+            var globalOutputBusY = frameBottom + 2;
+            DrawOutputBundle(
+                trueBundleX,
+                whenTrue.OutputOffsets.Select(offset => trueOrigin + offset),
+                childTop + whenTrue.Lines.Count - 1);
+            DrawOutputBundle(
+                falseBundleX,
+                whenFalse.OutputOffsets.Select(offset => falseOrigin + offset),
+                childTop + whenFalse.Lines.Count - 1);
+            var outputBusStart = outputOffsets
+                .Append(trueBundleX)
+                .Append(falseBundleX)
+                .Min();
+            var outputBusEnd = outputOffsets
+                .Append(trueBundleX)
+                .Append(falseBundleX)
+                .Max();
+            DrawDoubleHorizontal(
+                globalOutputBusY,
+                outputBusStart,
+                outputBusEnd);
+
+            foreach (var outputX in outputOffsets)
+            {
+                DrawDoubleVertical(
+                    outputX,
+                    globalOutputBusY + 1,
+                    contentBottom);
+            }
+
+            foreach (var x in outputOffsets
+                .Append(trueBundleX)
+                .Append(falseBundleX)
+                .Distinct())
+            {
+                canvas.Overwrite(
+                    x,
+                    globalOutputBusY,
+                    GetJunction(
+                        doubleStroke: true,
+                        x,
+                        outputBusStart,
+                        outputBusEnd,
+                        up: x == trueBundleX || x == falseBundleX,
+                        down: outputOffsets.Contains(x)));
+            }
+
+            void DrawOutputBundle(
+                int bundleX,
+                IEnumerable<int> branchOutputs,
+                int branchOutputY)
+            {
+                var ports = branchOutputs.ToArray();
+
+                foreach (var portX in ports)
+                {
+                    canvas.DrawVertical(
+                        portX,
+                        branchOutputY,
+                        localOutputBusY - 1);
+                }
+
+                var busStart = ports.Append(bundleX).Min();
+                var busEnd = ports.Append(bundleX).Max();
+                canvas.DrawHorizontal(
+                    localOutputBusY,
+                    busStart,
+                    busEnd);
+
+                foreach (var x in ports.Append(bundleX).Distinct())
+                {
+                    canvas.Overwrite(
+                        x,
+                        localOutputBusY,
+                        GetJunction(
+                            doubleStroke: false,
+                            x,
+                            busStart,
+                            busEnd,
+                            up: ports.Contains(x),
+                            down: x == bundleX));
+                }
+
+                if (localOutputBusY + 1 < frameBottom)
+                {
+                    canvas.DrawVertical(
+                        bundleX,
+                        localOutputBusY + 1,
+                        frameBottom - 1);
+                }
+
+                canvas.Overwrite(bundleX, frameBottom, '╥');
+                DrawDoubleVertical(
+                    bundleX,
+                    frameBottom + 1,
+                    globalOutputBusY - 1);
+            }
+        }
+
+        using var writer = new StringWriter(CultureInfo.InvariantCulture);
+        canvas.WriteTo(writer);
+
+        return new GraphNodeContent(
+            writer.ToString()
+                .Split(Environment.NewLine)
+                .Where(static line => line.Length > 0)
+                .ToArray(),
+            [conditionX, .. inputOffsets],
+            outputOffsets);
+
+        string CreateEmptyFrameLine() =>
+            $"│ {string.Empty.PadRight(whenTrueWidth)} " +
+            $"│ {string.Empty.PadRight(whenFalseWidth)} │";
+
+        static GraphNodeContent ReserveTitleColumns(
+            GraphNodeContent content,
+            string title)
+        {
+            if (content.InputOffsets.Count == 0)
+            {
+                return content;
+            }
+
+            var minimumInputOffset = content.InputOffsets.Min();
+            var requiredInputOffset = title.Length + 2;
+            var padding = Math.Max(
+                0,
+                requiredInputOffset - minimumInputOffset);
+
+            if (padding == 0)
+            {
+                return content;
+            }
+
+            return new GraphNodeContent(
+                content.Lines
+                    .Select(line => new string(' ', padding) + line)
+                    .ToArray(),
+                content.InputOffsets
+                    .Select(offset => offset + padding)
+                    .ToArray(),
+                content.OutputOffsets
+                    .Select(offset => offset + padding)
+                    .ToArray());
+        }
+
+        void DrawDoubleHorizontal(int y, int startX, int endX)
+        {
+            for (var x = Math.Min(startX, endX);
+                x <= Math.Max(startX, endX);
+                x++)
+            {
+                canvas.Overwrite(x, y, '═');
+            }
+        }
+
+        void DrawDoubleVertical(int x, int startY, int endY)
+        {
+            for (var y = Math.Min(startY, endY);
+                y <= Math.Max(startY, endY);
+                y++)
+            {
+                canvas.Overwrite(x, y, '║');
+            }
+        }
+
+        static char GetJunction(
+            bool doubleStroke,
+            int x,
+            int start,
+            int end,
+            bool up,
+            bool down)
+        {
+            var left = x > start;
+            var right = x < end;
+            var connections =
+                (up ? 0b0001 : 0) |
+                (right ? 0b0010 : 0) |
+                (down ? 0b0100 : 0) |
+                (left ? 0b1000 : 0);
+
+            return (doubleStroke, connections) switch
+            {
+                (false, 0b0011) => '└',
+                (false, 0b0110) => '┌',
+                (false, 0b1001) => '┘',
+                (false, 0b1100) => '┐',
+                (false, 0b1011) => '┴',
+                (false, 0b1110) => '┬',
+                (false, 0b0111) => '├',
+                (false, 0b1101) => '┤',
+                (false, 0b0101) => '│',
+                (false, 0b1111) => '┼',
+                (true, 0b0011) => '╚',
+                (true, 0b0110) => '╔',
+                (true, 0b1001) => '╝',
+                (true, 0b1100) => '╗',
+                (true, 0b1011) => '╩',
+                (true, 0b1110) => '╦',
+                (true, 0b0111) => '╠',
+                (true, 0b1101) => '╣',
+                (true, 0b0101) => '║',
+                (true, 0b1111) => '╬',
+                _ => doubleStroke ? '═' : '─',
+            };
+        }
+
+        static int SelectBundleX(
+            int preferred,
+            int minimum,
+            int maximum,
+            IEnumerable<int> branchPorts)
+        {
+            var ports = branchPorts.ToHashSet();
+            var candidate = Enumerable.Range(
+                    minimum,
+                    Math.Max(1, maximum - minimum + 1))
+                .Where(candidate => !ports.Contains(candidate))
+                .OrderBy(candidate => Math.Abs(candidate - preferred))
+                .FirstOrDefault(-1);
+
+            return candidate >= 0
+                ? candidate
+                : Math.Clamp(preferred, minimum, maximum);
+        }
+
+        int[] CreateBusPortOffsets(
+            int count,
+            IReadOnlyCollection<int> excluded)
+        {
+            var used = new HashSet<int>(excluded);
+            var result = new int[count];
+
+            for (var index = 0; index < count; index++)
+            {
+                var desired = ((index + 1) * frameWidth) / (count + 1);
+                var candidate = Enumerable.Range(1, frameWidth - 2)
+                    .Where(position => !used.Contains(position))
+                    .OrderBy(position => Math.Abs(position - desired))
+                    .First();
+                result[index] = candidate;
+                used.Add(candidate);
+            }
+
+            return result;
+        }
+
+        string CreateTitleLine()
+        {
+            var trueLine = whenTrue.Lines.Count > 0
+                ? whenTrue.Lines[0]
+                : string.Empty;
+            var falseLine = whenFalse.Lines.Count > 0
+                ? whenFalse.Lines[0]
+                : string.Empty;
+            var characters = (
+                $"│ {trueLine.PadRight(whenTrueWidth)} " +
+                $"│ {falseLine.PadRight(whenFalseWidth)} │")
+                .ToCharArray();
+            WriteTitle(
+                characters,
+                "true",
+                left: 0,
+                right: dividerX,
+                [trueBundleX]);
+            WriteTitle(
+                characters,
+                "false",
+                left: dividerX,
+                right: frameWidth - 1,
+                [falseBundleX]);
+            return new string(characters);
+        }
+
+        static void WriteTitle(
+            char[] characters,
+            string title,
+            int left,
+            int right,
+            IEnumerable<int> inputPorts)
+        {
+            var ports = inputPorts.ToArray();
+            var start = Enumerable.Range(
+                    left + 2,
+                    Math.Max(1, right - left - title.Length - 2))
+                .FirstOrDefault(
+                    candidate => ports.All(
+                        port =>
+                            port < candidate - 1 ||
+                            port > candidate + title.Length),
+                    left + 2);
+
+            title.CopyTo(
+                sourceIndex: 0,
+                characters,
+                destinationIndex: start,
+                count: title.Length);
         }
     }
 
@@ -272,15 +760,21 @@ public static class AsciiGraphWriter
         }
 
         DrawSharedSourceJunctions(canvas, layout.Edges);
+        DrawSharedValueCrossings(canvas, layout.Edges);
 
         foreach (var node in layout.Nodes)
         {
             DrawNode(canvas, node);
         }
 
+        var labeledSources = new HashSet<(Node Source, int Slot)>();
+
         foreach (var edge in layout.Edges)
         {
-            DrawEdgeEndpoints(canvas, edge);
+            DrawEdgeEndpoints(
+                canvas,
+                edge,
+                labeledSources.Add((edge.Source, edge.SourceSlot)));
         }
 
         canvas.WriteTo(writer);
@@ -329,8 +823,169 @@ public static class AsciiGraphWriter
             };
 
             canvas.Overwrite(sourceX, group.Key.RouteY, junction);
+
+            var routes = group
+                .Select(entry => (
+                    Entry: entry,
+                    DestinationX:
+                        entry.Edge.LaneX ??
+                        entry.Edge.Target.GetInputX(entry.Edge.TargetSlot)))
+                .ToArray();
+
+            foreach (var route in routes)
+            {
+                var x = route.DestinationX;
+
+                if (!routes.Any(
+                    other =>
+                        !ReferenceEquals(other.Entry.Edge, route.Entry.Edge) &&
+                        Math.Min(sourceX, other.DestinationX) < x &&
+                        x < Math.Max(sourceX, other.DestinationX)))
+                {
+                    continue;
+                }
+
+                var continuesLeft = routes.Any(
+                    other => Math.Min(sourceX, other.DestinationX) < x);
+                var continuesRight = routes.Any(
+                    other => Math.Max(sourceX, other.DestinationX) > x);
+                canvas.Overwrite(
+                    x,
+                    group.Key.RouteY,
+                    (continuesLeft, continuesRight) switch
+                    {
+                        (true, true) => '┬',
+                        (true, false) => '┐',
+                        (false, true) => '┌',
+                        _ => '│',
+                    });
+            }
         }
     }
+
+    private static void DrawSharedValueCrossings(
+        Canvas canvas,
+        IReadOnlyList<Edge> edges)
+    {
+        foreach (var group in edges.GroupBy(
+            edge => (edge.Source, edge.SourceSlot)))
+        {
+            var groupedEdges = group.ToArray();
+
+            for (var firstIndex = 0;
+                firstIndex < groupedEdges.Length;
+                firstIndex++)
+            {
+                for (var secondIndex = firstIndex + 1;
+                    secondIndex < groupedEdges.Length;
+                    secondIndex++)
+                {
+                    ConnectCrossings(
+                        groupedEdges[firstIndex],
+                        groupedEdges[secondIndex]);
+                    ConnectCrossings(
+                        groupedEdges[secondIndex],
+                        groupedEdges[firstIndex]);
+                }
+            }
+        }
+
+        void ConnectCrossings(Edge horizontalEdge, Edge verticalEdge)
+        {
+            foreach (var horizontal in GetHorizontalSegments(horizontalEdge))
+            {
+                foreach (var vertical in GetVerticalSegments(verticalEdge))
+                {
+                    if (Math.Min(horizontal.StartX, horizontal.EndX) <=
+                            vertical.X &&
+                        vertical.X <=
+                            Math.Max(horizontal.StartX, horizontal.EndX) &&
+                        Math.Min(vertical.StartY, vertical.EndY) <
+                            horizontal.Y &&
+                        horizontal.Y <
+                            Math.Max(vertical.StartY, vertical.EndY))
+                    {
+                        canvas.Overwrite(
+                            vertical.X,
+                            horizontal.Y,
+                            vertical.X == horizontal.StartX
+                                ? horizontal.EndX > horizontal.StartX
+                                    ? '├'
+                                    : '┤'
+                                : vertical.X == horizontal.EndX
+                                    ? horizontal.StartX > horizontal.EndX
+                                        ? '├'
+                                        : '┤'
+                                    : '┼');
+                    }
+                }
+            }
+        }
+    }
+
+    private static IEnumerable<(int Y, int StartX, int EndX)>
+        GetHorizontalSegments(Edge edge)
+    {
+        var sourceX = edge.Source.GetOutputX(edge.SourceSlot);
+        var targetX = edge.Target.GetInputX(edge.TargetSlot);
+
+        if (edge.LaneX is int laneX)
+        {
+            yield return (edge.DepartureY!.Value, sourceX, laneX);
+            yield return (edge.ArrivalY!.Value, laneX, targetX);
+        }
+        else if (sourceX != targetX)
+        {
+            yield return (GetMiddleRouteY(edge), sourceX, targetX);
+        }
+    }
+
+    private static IEnumerable<(int X, int StartY, int EndY)>
+        GetVerticalSegments(Edge edge)
+    {
+        var sourceX = edge.Source.GetOutputX(edge.SourceSlot);
+        var sourceY = edge.Source.Bottom;
+        var targetX = edge.Target.GetInputX(edge.TargetSlot);
+        var targetY = edge.Target.Top;
+
+        if (edge.LaneX is int laneX)
+        {
+            if (laneX == sourceX)
+            {
+                yield return (
+                    sourceX,
+                    sourceY,
+                    edge.ArrivalY!.Value);
+                yield return (targetX, edge.ArrivalY.Value, targetY);
+                yield break;
+            }
+
+            yield return (sourceX, sourceY, edge.DepartureY!.Value);
+            yield return (
+                laneX,
+                edge.DepartureY.Value,
+                edge.ArrivalY!.Value);
+            yield return (targetX, edge.ArrivalY.Value, targetY);
+        }
+        else if (sourceX == targetX)
+        {
+            yield return (sourceX, sourceY, targetY);
+        }
+        else
+        {
+            var middleY = GetMiddleRouteY(edge);
+            yield return (sourceX, sourceY, middleY);
+            yield return (targetX, middleY, targetY);
+        }
+    }
+
+    private static int GetMiddleRouteY(Edge edge) =>
+        Math.Min(
+            edge.Target.Top - 2,
+            Math.Max(
+                edge.Source.Bottom + 2,
+                edge.SourceRankBottom + 2) +
+            ((edge.RouteLane ?? 0) * 2));
 
     private static void DrawEdge(Canvas canvas, Edge edge)
     {
@@ -349,28 +1004,71 @@ public static class AsciiGraphWriter
         {
             var laneStartY = edge.DepartureY!.Value;
             var laneEndY = edge.ArrivalY!.Value;
+
+            if (laneX == sourceX)
+            {
+                if (sourceX == targetX)
+                {
+                    canvas.DrawEdgeVertical(
+                        sourceX,
+                        sourceY,
+                        targetY,
+                        verticalStroke);
+                    return;
+                }
+
+                var laneEndSourceExisting = canvas.Get(sourceX, laneEndY);
+                var laneEndTargetExisting = canvas.Get(targetX, laneEndY);
+                canvas.DrawEdgeVertical(
+                    sourceX,
+                    sourceY,
+                    laneEndY,
+                    verticalStroke);
+                canvas.DrawEdgeHorizontal(
+                    laneEndY,
+                    sourceX,
+                    targetX,
+                    horizontalStroke);
+                canvas.DrawEdgeVertical(
+                    targetX,
+                    laneEndY,
+                    targetY,
+                    verticalStroke);
+                canvas.OverwriteCorner(
+                    sourceX,
+                    laneEndY,
+                    targetX > sourceX ? '└' : '┘',
+                    laneEndSourceExisting);
+                canvas.OverwriteCorner(
+                    targetX,
+                    laneEndY,
+                    targetX > sourceX ? '┐' : '┌',
+                    laneEndTargetExisting);
+                return;
+            }
+
             var laneSourceCornerExisting = canvas.Get(sourceX, laneStartY);
             var departureCornerExisting = canvas.Get(laneX, laneStartY);
             var arrivalCornerExisting = canvas.Get(laneX, laneEndY);
             var laneTargetCornerExisting = canvas.Get(targetX, laneEndY);
-            canvas.DrawVertical(sourceX, sourceY, laneStartY, verticalStroke);
-            canvas.DrawVertical(targetX, laneEndY, targetY, verticalStroke);
-            canvas.DrawHorizontal(
+            canvas.DrawEdgeVertical(sourceX, sourceY, laneStartY, verticalStroke);
+            canvas.DrawEdgeVertical(targetX, laneEndY, targetY, verticalStroke);
+            canvas.DrawEdgeHorizontal(
                 laneStartY,
                 sourceX,
                 laneX,
                 horizontalStroke);
-            canvas.DrawVertical(
+            canvas.DrawEdgeVertical(
                 laneX,
                 laneStartY,
                 laneEndY,
                 verticalStroke);
-            canvas.DrawHorizontal(
+            canvas.DrawEdgeHorizontal(
                 laneEndY,
                 laneX,
                 targetX,
                 horizontalStroke);
-            canvas.DrawVertical(
+            canvas.DrawEdgeVertical(
                 targetX,
                 laneEndY,
                 lastRouteY,
@@ -400,7 +1098,7 @@ public static class AsciiGraphWriter
 
         if (sourceX == targetX)
         {
-            canvas.DrawVertical(
+            canvas.DrawEdgeVertical(
                 sourceX,
                 sourceY,
                 targetY,
@@ -413,17 +1111,17 @@ public static class AsciiGraphWriter
             firstRouteY + ((edge.RouteLane ?? 0) * 2));
         var sourceCornerExisting = canvas.Get(sourceX, middleY);
         var targetCornerExisting = canvas.Get(targetX, middleY);
-        canvas.DrawVertical(
+        canvas.DrawEdgeVertical(
             sourceX,
             sourceY,
             middleY,
             verticalStroke);
-        canvas.DrawHorizontal(
+        canvas.DrawEdgeHorizontal(
             middleY,
             sourceX,
             targetX,
             horizontalStroke);
-        canvas.DrawVertical(
+        canvas.DrawEdgeVertical(
             targetX,
             middleY,
             targetY,
@@ -440,7 +1138,10 @@ public static class AsciiGraphWriter
             targetCornerExisting);
     }
 
-    private static void DrawEdgeEndpoints(Canvas canvas, Edge edge)
+    private static void DrawEdgeEndpoints(
+        Canvas canvas,
+        Edge edge,
+        bool drawSourceLabel)
     {
         var sourceX = edge.Source.GetOutputX(edge.SourceSlot);
         var targetX = edge.Target.GetInputX(edge.TargetSlot);
@@ -450,7 +1151,12 @@ public static class AsciiGraphWriter
             canvas.Overwrite(
                 sourceX,
                 edge.Source.Bottom,
-                edge.Source.HasBodyOutput(edge.SourceSlot) ? '┼' : '┬');
+                edge.Source.UsesDoubleBoundaryLines &&
+                    edge.Source.HasBodyOutput(edge.SourceSlot)
+                    ? '╨'
+                    : edge.Source.HasBodyOutput(edge.SourceSlot)
+                        ? '┼'
+                        : '┬');
         }
 
         if (edge.Target.Kind is not NodeKind.TargetOutput)
@@ -458,18 +1164,23 @@ public static class AsciiGraphWriter
             canvas.Overwrite(
                 targetX,
                 edge.Target.Top,
-                edge.Target.HasBodyInput(edge.TargetSlot) ? '┼' : '┴');
+                edge.Target.UsesDoubleBoundaryLines &&
+                    edge.TargetSlot > 0 &&
+                    edge.Target.HasBodyInput(edge.TargetSlot)
+                    ? '╥'
+                    : edge.Target.HasBodyInput(edge.TargetSlot)
+                        ? '┼'
+                        : '┴');
             canvas.Overwrite(targetX, edge.Target.Top - 1, '▼');
         }
 
-        if (edge.Source.Kind is not NodeKind.TargetInput)
+        if (drawSourceLabel &&
+            edge.Source.Kind is not NodeKind.TargetInput)
         {
-            var edgeLabel = edge.IsOrderEdge
-                ? "order"
-                : edge.IsGuardEdge
-                    ? "guard"
-                : $"o{edge.SourcePort!.Value}";
-            canvas.Write(sourceX + 1, edge.Source.Bottom + 1, edgeLabel);
+            canvas.Write(
+                sourceX + 1,
+                edge.Source.Bottom + 1,
+                edge.SourceLabel);
         }
 
         if (edge.Target.Kind is not NodeKind.TargetOutput &&
@@ -487,7 +1198,11 @@ public static class AsciiGraphWriter
     {
         if (node.Kind is not NodeKind.Box)
         {
-            canvas.Write(node.Left + (node.Width / 2) + 1, node.Top, node.Label);
+            var portX = node.Kind is NodeKind.TargetInput
+                ? node.GetOutputX(0)
+                : node.GetInputX(0);
+            canvas.Set(portX, node.Top, '│');
+            canvas.Write(portX + 1, node.Top, node.Label);
             return;
         }
 
@@ -513,10 +1228,21 @@ public static class AsciiGraphWriter
             {
                 if (node.InputPorts?[slot] is not null)
                 {
-                    canvas.DrawVertical(
-                        node.GetInputX(slot),
-                        node.Top,
-                        node.Top + 2);
+                    var inputX = node.GetInputX(slot);
+
+                    if (node.UsesDoubleBoundaryLines && slot > 0)
+                    {
+                        canvas.Overwrite(inputX, node.Top, '╥');
+                        canvas.Overwrite(inputX, node.Top + 1, '║');
+                        canvas.Overwrite(inputX, node.Top + 2, '║');
+                    }
+                    else
+                    {
+                        canvas.DrawVertical(
+                            inputX,
+                            node.Top,
+                            node.Top + 2);
+                    }
                 }
             }
 
@@ -524,10 +1250,20 @@ public static class AsciiGraphWriter
             {
                 if (node.OutputPorts?[slot] is not null)
                 {
-                    canvas.DrawVertical(
-                        node.GetOutputX(slot),
-                        node.Bottom - 1,
-                        node.Bottom);
+                    var outputX = node.GetOutputX(slot);
+
+                    if (node.UsesDoubleBoundaryLines)
+                    {
+                        canvas.Overwrite(outputX, node.Bottom - 1, '║');
+                        canvas.Overwrite(outputX, node.Bottom, '╨');
+                    }
+                    else
+                    {
+                        canvas.DrawVertical(
+                            outputX,
+                            node.Bottom - 1,
+                            node.Bottom);
+                    }
                 }
             }
         }
@@ -562,42 +1298,86 @@ public static class AsciiGraphWriter
             OperationGraph graph,
             Func<Operation, string>? labelProvider,
             Func<Operation, GraphNodeContent?>? contentProvider,
+            Func<Value, string?>? valueLabelProvider = null,
+            Func<Value, string?>? externalLabelProvider = null,
             bool renderDanglingOutputs = true,
-            bool preserveBoundaryOrder = false)
+            bool preserveBoundaryOrder = false,
+            bool placeSourceOperationsAfterInputs = false)
         {
             var operationNodes =
                 new Dictionary<Operation, Node>(ReferenceEqualityComparer.Instance);
+            var displayIndex = 0;
 
             for (var index = 0; index < graph.Operations.Count; index++)
             {
                 var operation = graph.Operations[index];
                 var boundary = operation as ITargetBoundaryOperation;
                 var target = operation as ITargetRenderingOperation;
+                var conditional = operation as ConditionalRegionOperation;
+                var content = contentProvider?.Invoke(operation);
                 var operationLabel =
                     labelProvider?.Invoke(operation) ??
                     GetTypeDisplayName(operation.GetType());
+                var inputPorts = target?.InputPorts ??
+                    (conditional is null
+                        ? null
+                        : Enumerable.Range(
+                                0,
+                                conditional.Inputs.Count)
+                            .Select(static port => (int?)port)
+                            .ToArray());
+                var outputPorts = target?.OutputPorts ??
+                    (conditional is null
+                        ? null
+                        : Enumerable.Range(
+                                0,
+                                conditional.Outputs.Count)
+                            .Select(static port => (int?)port)
+                            .ToArray());
+                var outputLabels = operation.Outputs
+                    .Select((value, outputIndex) =>
+                        GetSourceLabel(
+                            value,
+                            operation,
+                            outputIndex,
+                            valueLabelProvider))
+                    .ToArray();
                 operationNodes.Add(
                     operation,
                     new Node(
-                            boundary is null
-                                ? $"[{index}] {operationLabel}"
-                                : operationLabel,
-                            index,
-                            operation.Inputs.Count,
-                            operation.Outputs.Count,
-                            contentProvider?.Invoke(operation),
-                            boundary is not null
-                                ? boundary.BoundaryKind is TargetBoundaryKind.Input
-                                    ? NodeKind.TargetInput
-                                    : NodeKind.TargetOutput
-                                : NodeKind.Box,
-                            target?.BodyInputCount ?? 0,
-                            target?.BodyOutputCount ?? 0,
-                            target?.InputPorts,
-                            target?.OutputPorts));
+                        boundary is null
+                            ? $"[{displayIndex++}] {operationLabel}"
+                            : operationLabel,
+                        index,
+                        operation.Inputs.Count,
+                        operation.Outputs.Count,
+                        content,
+                        boundary is not null
+                            ? boundary.BoundaryKind is TargetBoundaryKind.Input
+                                ? NodeKind.TargetInput
+                                : NodeKind.TargetOutput
+                            : NodeKind.Box,
+                        target?.BodyInputCount ?? 0,
+                        target?.BodyOutputCount ?? 0,
+                        inputPorts,
+                        outputPorts,
+                        outputLabels,
+                        usesDoubleBoundaryLines:
+                            conditional is not null));
             }
 
             AssignOperationRanks(graph, operationNodes);
+
+            if (placeSourceOperationsAfterInputs &&
+                operationNodes.Values.Any(
+                    node => node.Kind is NodeKind.TargetInput))
+            {
+                foreach (var node in operationNodes.Values.Where(
+                    node => node.Kind is NodeKind.Box && node.Rank == 0))
+                {
+                    node.Rank = 1;
+                }
+            }
 
             var nodes = operationNodes.Values.OrderBy(node => node.Order).ToList();
             var edges = new List<Edge>();
@@ -636,14 +1416,21 @@ public static class AsciiGraphWriter
                                     ? null
                                     : GetInputPort(consumer, inputIndex),
                                 isOrderEdge,
-                                isGuardEdge));
+                                isGuardEdge,
+                                GetSourceLabel(
+                                    input,
+                                    producer,
+                                    IndexOfReference(producer.Outputs, input),
+                                    valueLabelProvider)));
                         continue;
                     }
 
                     if (!externalNodes.TryGetValue(input, out var externalNode))
                     {
                         externalNode = new Node(
-                            $"external[{externalNodes.Count}]",
+                            externalLabelProvider?.Invoke(input) ??
+                                valueLabelProvider?.Invoke(input) ??
+                                $"external[{externalNodes.Count}]",
                             nextOrder++,
                             inputCount: 0,
                             outputCount: 1)
@@ -665,7 +1452,12 @@ public static class AsciiGraphWriter
                                 ? null
                                 : GetInputPort(consumer, inputIndex),
                             isOrderEdge,
-                            isGuardEdge));
+                            isGuardEdge,
+                            GetSourceLabel(
+                                input,
+                                producer: null,
+                                outputIndex: 0,
+                                valueLabelProvider)));
                 }
             }
 
@@ -689,8 +1481,11 @@ public static class AsciiGraphWriter
 
                     var isOrderEdge = IsOrderValue(output);
                     var isGuardEdge = IsGuardValue(output);
+                    var valueLabel = valueLabelProvider?.Invoke(output);
                     var outputNode = new Node(
-                        $"output[{producerNode.Order}:{outputIndex}]",
+                        valueLabel is not null
+                            ? "output"
+                            : $"output[{producerNode.Order}:{outputIndex}]",
                         nextOrder++,
                         inputCount: 1,
                         outputCount: 0)
@@ -710,7 +1505,12 @@ public static class AsciiGraphWriter
                                 : outputIndex,
                             TargetPort: null,
                             isOrderEdge,
-                            isGuardEdge));
+                            isGuardEdge,
+                            GetSourceLabel(
+                                output,
+                                operation,
+                                outputIndex,
+                                valueLabelProvider)));
                 }
             }
 
@@ -729,12 +1529,6 @@ public static class AsciiGraphWriter
             var longEdges = edges
                 .Where(edge => edge.Target.Rank > edge.Source.Rank + 1)
                 .ToArray();
-
-            for (var index = 0; index < longEdges.Length; index++)
-            {
-                longEdges[index].LaneX =
-                    contentWidth + 2 + (index * 2);
-            }
 
             var ranks = nodes
                 .GroupBy(node => node.Rank)
@@ -778,6 +1572,10 @@ public static class AsciiGraphWriter
                 rowWidths,
                 contentWidth,
                 preserveBoundaryOrder);
+            AssignLongEdgeLanes(
+                longEdges,
+                nodes,
+                contentWidth);
 
             var routeLaneCounts = AssignRouteLanes(ranks, edges);
 
@@ -837,6 +1635,47 @@ public static class AsciiGraphWriter
             var height = nodes.Max(node => node.Bottom) + 1;
 
             return new Layout(nodes, edges, operationNodes, width, height);
+        }
+
+        private static void AssignLongEdgeLanes(
+            IReadOnlyList<Edge> longEdges,
+            IReadOnlyList<Node> nodes,
+            int contentWidth)
+        {
+            var reserved = new HashSet<int>();
+            var fallbackIndex = 0;
+
+            foreach (var edge in longEdges)
+            {
+                var sourceX = edge.Source.GetOutputX(edge.SourceSlot);
+                var targetX = edge.Target.GetInputX(edge.TargetSlot);
+                var blocked = nodes
+                    .Where(node =>
+                        node.Rank > edge.Source.Rank &&
+                        node.Rank < edge.Target.Rank)
+                    .SelectMany(node => Enumerable.Range(
+                        Math.Max(0, node.Left - 1),
+                        Math.Min(contentWidth - 1, node.Right + 1) -
+                            Math.Max(0, node.Left - 1) +
+                            1))
+                    .ToHashSet();
+                var laneX = Enumerable.Range(0, contentWidth)
+                    .Where(candidate =>
+                        !blocked.Contains(candidate) &&
+                        !reserved.Contains(candidate))
+                    .OrderBy(candidate =>
+                        Math.Abs(candidate - sourceX) +
+                        Math.Abs(candidate - targetX))
+                    .FirstOrDefault(-1);
+
+                if (laneX < 0)
+                {
+                    laneX = contentWidth + 2 + (fallbackIndex++ * 2);
+                }
+
+                edge.LaneX = laneX;
+                reserved.Add(laneX);
+            }
         }
 
         private static void ReorderRanksTowardConsumers(
@@ -1097,8 +1936,9 @@ public static class AsciiGraphWriter
 
             var edge = incoming[0];
             var sourceX = edge.Source.GetOutputX(edge.SourceSlot);
-            var targetOffset =
-                (((edge.TargetSlot + 1) * node.Width) /
+            var targetOffset = node.Kind is NodeKind.TargetOutput
+                ? 1
+                : (((edge.TargetSlot + 1) * node.Width) /
                     (node.InputCount + 1));
 
             node.Left = Math.Clamp(
@@ -1265,6 +2105,34 @@ public static class AsciiGraphWriter
                 "The producer does not expose the value as an output.");
         }
 
+        private static string GetSourceLabel(
+            Value value,
+            Operation? producer,
+            int outputIndex,
+            Func<Value, string?>? valueLabelProvider)
+        {
+            if (IsOrderValue(value))
+            {
+                return "order";
+            }
+
+            if (IsGuardValue(value))
+            {
+                return "guard";
+            }
+
+            var valueLabel = valueLabelProvider?.Invoke(value);
+
+            if (valueLabel is not null)
+            {
+                return valueLabel;
+            }
+
+            return producer is null
+                ? "o0"
+                : $"o{GetOutputPort(producer, outputIndex)}";
+        }
+
         private static string GetTypeDisplayName(Type type)
         {
             var name = type.Name;
@@ -1272,6 +2140,35 @@ public static class AsciiGraphWriter
             return genericMarker < 0 ? name : name[..genericMarker];
         }
     }
+
+    private static Func<Value, string?> CreateInitialValueLabelProvider(
+        BuildProgram program)
+    {
+        var labels = new Dictionary<Value, string>(
+            ReferenceEqualityComparer.Instance);
+
+        foreach (var initialValue in program.InitialValues)
+        {
+            labels.Add(
+                initialValue.Value,
+                FormatInitialValue(initialValue.Content));
+        }
+
+        return value => labels.GetValueOrDefault(value);
+    }
+
+    private static string FormatInitialValue(object? content) =>
+        content switch
+        {
+            null => "null",
+            string value => value.Length == 0 ? "''" : value,
+            IReadOnlyList<string> items =>
+                $"@({string.Join("; ", items)})",
+            bool value => value ? "true" : "false",
+            IFormattable value =>
+                value.ToString(format: null, CultureInfo.InvariantCulture),
+            _ => content.ToString() ?? string.Empty,
+        };
 
     private sealed class Node(
         string label,
@@ -1283,7 +2180,9 @@ public static class AsciiGraphWriter
         int bodyInputCount = 0,
         int bodyOutputCount = 0,
         IReadOnlyList<int?>? inputPorts = null,
-        IReadOnlyList<int?>? outputPorts = null)
+        IReadOnlyList<int?>? outputPorts = null,
+        IReadOnlyList<string>? outputLabels = null,
+        bool usesDoubleBoundaryLines = false)
     {
         public string Label { get; } = label;
 
@@ -1298,6 +2197,9 @@ public static class AsciiGraphWriter
         public IReadOnlyList<int?>? InputPorts { get; } = inputPorts;
 
         public IReadOnlyList<int?>? OutputPorts { get; } = outputPorts;
+
+        public bool UsesDoubleBoundaryLines { get; } =
+            usesDoubleBoundaryLines;
 
         public IReadOnlyList<string> Content { get; } = content?.Lines ?? [];
 
@@ -1321,7 +2223,8 @@ public static class AsciiGraphWriter
                 outputCount,
                 content,
                 inputPorts,
-                outputPorts)
+                outputPorts,
+                outputLabels)
             : label.Length + 3;
 
         public int Height =>
@@ -1337,7 +2240,7 @@ public static class AsciiGraphWriter
 
         public int GetInputX(int slot) =>
             Kind is NodeKind.TargetOutput
-                ? Left + (Width / 2)
+                ? Left + 1
                 : content is not null &&
                     InputPorts is not null &&
                     InputPorts[slot] is int inputPort
@@ -1346,7 +2249,7 @@ public static class AsciiGraphWriter
 
         public int GetOutputX(int slot) =>
             Kind is NodeKind.TargetInput
-                ? Left + (Width / 2)
+                ? Left + 1
                 : content is not null &&
                     OutputPorts is not null &&
                     OutputPorts[slot] is int outputPort
@@ -1426,7 +2329,8 @@ public static class AsciiGraphWriter
             int outputCount,
             GraphNodeContent? content,
             IReadOnlyList<int?>? inputPorts,
-            IReadOnlyList<int?>? outputPorts)
+            IReadOnlyList<int?>? outputPorts,
+            IReadOnlyList<string>? outputLabels)
         {
             var contentOffset = GetContentOffset(label, content);
             var width = Math.Max(
@@ -1438,15 +2342,15 @@ public static class AsciiGraphWriter
                     GetOrderOutputReservation(content, outputPorts) +
                     4);
 
-            while (content is not null &&
-                !PortLabelsFit(
+            while (!PortLabelsFit(
                     width,
                     inputCount,
                     outputCount,
                     content,
                     contentOffset,
                     inputPorts,
-                    outputPorts))
+                    outputPorts,
+                    outputLabels))
             {
                 width++;
             }
@@ -1458,30 +2362,41 @@ public static class AsciiGraphWriter
             int width,
             int inputCount,
             int outputCount,
-            GraphNodeContent content,
+            GraphNodeContent? content,
             int contentOffset,
             IReadOnlyList<int?>? inputPorts,
-            IReadOnlyList<int?>? outputPorts) =>
+            IReadOnlyList<int?>? outputPorts,
+            IReadOnlyList<string>? outputLabels) =>
             LabelsFit(
                 Enumerable.Range(0, inputPorts?.Count ?? 0)
                     .Select(slot =>
                     {
                         var port = inputPorts![slot];
-                        var x = port is int inputPort
+                        var x = content is not null &&
+                            port is int inputPort
                             ? 2 + contentOffset + content.InputOffsets[inputPort]
                             : ((slot + 1) * width) / (Math.Max(1, inputCount) + 1);
                         return (Start: x, End: x + (port is int index ? $"i{index}".Length : 0));
                     }),
                 width) &&
             LabelsFit(
-                Enumerable.Range(0, outputPorts?.Count ?? 0)
+                Enumerable.Range(
+                    0,
+                    Math.Max(
+                        outputPorts?.Count ?? 0,
+                        outputLabels?.Count ?? 0))
                     .Select(slot =>
                     {
-                        var port = outputPorts![slot];
-                        var x = port is int outputPort
+                        var port = outputPorts?[slot];
+                        var x = content is not null &&
+                            port is int outputPort
                             ? 2 + contentOffset + content.OutputOffsets[outputPort]
-                            : GetOrderOutputPortX(width, slot, outputPorts);
-                        var labelLength = port is int index ? $"o{index}".Length : "order".Length;
+                            : content is not null && outputPorts is not null
+                                ? GetOrderOutputPortX(width, slot, outputPorts)
+                                : ((slot + 1) * width) /
+                                    (Math.Max(1, outputCount) + 1);
+                        var labelLength = outputLabels?[slot].Length ??
+                            (port is int index ? $"o{index}".Length : "order".Length);
                         return (Start: x, End: x + labelLength);
                     }),
                 width);
@@ -1552,7 +2467,8 @@ public static class AsciiGraphWriter
         int? SourcePort,
         int? TargetPort,
         bool IsOrderEdge,
-        bool IsGuardEdge)
+        bool IsGuardEdge,
+        string SourceLabel)
     {
         public int? LaneX { get; set; }
 
@@ -1609,6 +2525,44 @@ public static class AsciiGraphWriter
         {
             for (var y = Math.Min(startY, endY); y <= Math.Max(startY, endY); y++)
             {
+                Set(x, y, character);
+            }
+        }
+
+        public void DrawEdgeHorizontal(
+            int y,
+            int startX,
+            int endX,
+            char character)
+        {
+            for (var x = Math.Min(startX, endX); x <= Math.Max(startX, endX); x++)
+            {
+                var existing = _characters[y, x];
+                if (existing is '│' or '╎' or '╳')
+                {
+                    _characters[y, x] = '╳';
+                    continue;
+                }
+
+                Set(x, y, character);
+            }
+        }
+
+        public void DrawEdgeVertical(
+            int x,
+            int startY,
+            int endY,
+            char character)
+        {
+            for (var y = Math.Min(startY, endY); y <= Math.Max(startY, endY); y++)
+            {
+                var existing = _characters[y, x];
+                if (existing is '─' or '╌' or '╳')
+                {
+                    _characters[y, x] = '╳';
+                    continue;
+                }
+
                 Set(x, y, character);
             }
         }

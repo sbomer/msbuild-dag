@@ -405,6 +405,43 @@ public sealed class BuildProgramExecutorTests
     }
 
     [Fact]
+    public async Task BindsTargetInputsAndOutputsSymmetrically()
+    {
+        var externalInput = new Value<int>();
+        var bodyInput = new Value<int>();
+        var operation = new UnaryOperation(bodyInput);
+        var externalOutput = new Value<int>();
+        var target = new Target(
+            [],
+            [externalInput],
+            new OperationGraph(
+                [bodyInput],
+                [operation],
+                [operation.Result]),
+            [externalOutput],
+            []);
+        var program = new BuildProgram(
+            [target],
+            [new InitialValue<int>(externalInput, 41)]);
+        var values = new ValueStore();
+
+        await new BuildProgramExecutor(
+            program,
+            values,
+            static (candidate, store, _) =>
+            {
+                var unary = (UnaryOperation)candidate;
+                store.Set(unary.Result, store.Get(unary.Input) + 1);
+                return ValueTask.CompletedTask;
+            })
+            .ExecuteAsync(target);
+
+        Assert.Equal(41, values.Get(bodyInput));
+        Assert.Equal(42, values.Get(operation.Result));
+        Assert.Equal(42, values.Get(externalOutput));
+    }
+
+    [Fact]
     public async Task InactiveGuardSkipsOperation()
     {
         var guard = new Value<GuardToken>();

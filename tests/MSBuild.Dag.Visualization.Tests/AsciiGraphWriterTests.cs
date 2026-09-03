@@ -185,17 +185,18 @@ public sealed class AsciiGraphWriterTests
     [Fact]
     public void ExpandedBuildProgramIncludesTargetBodies()
     {
-        var data = new Value<string>();
-        var producer = new TestOperation([], [data]);
-        var consumer = new TestOperation([data], []);
+        var bodyOutput = new Value<string>();
+        var producer = new TestOperation([], [bodyOutput]);
         var first = new Target(
-            [],
-            [data],
             new OperationGraph([producer]));
+        var data = Assert.Single(first.Outputs);
+        var parameter = new Value<string>();
+        var consumer = new TestOperation([parameter], []);
         var second = new Target(
-            [data],
             [],
-            new OperationGraph([consumer]));
+            [data],
+            new OperationGraph([parameter], [consumer], []),
+            []);
         var program = new BuildProgram([first, second]);
         var names = new Dictionary<Target, string>(
             ReferenceEqualityComparer.Instance)
@@ -236,6 +237,114 @@ public sealed class AsciiGraphWriterTests
 
         Assert.Contains("[0] 'value'", result);
         Assert.DoesNotContain("[0] TestOperation", result);
+    }
+
+    [Fact]
+    public void ExpandedBuildProgramUsesProvidedValueLabels()
+    {
+        var value = new Value<string>();
+        var operation = new TestOperation([], [value]);
+        var target = new Target(
+            [],
+            [value],
+            new OperationGraph([operation]));
+
+        var result = AsciiGraphWriter.Render(
+            new BuildProgram([target]),
+            valueLabelProvider: candidate =>
+                ReferenceEquals(candidate, value)
+                    ? "$(Configuration)#0"
+                    : ReferenceEquals(candidate, target.Outputs[0])
+                        ? "$(Configuration)#1"
+                        : null);
+
+        Assert.Contains("$(Configuration)#0", result);
+        Assert.Contains("$(Configuration)#1", result);
+        Assert.DoesNotContain("output[", result);
+    }
+
+    [Fact]
+    public void ExpandedBuildProgramShowsInitialContentAsValueSource()
+    {
+        var initial = new Value<string>();
+        var parameter = new Value<string>();
+        var consumer = new TestOperation([parameter], []);
+        var target = new Target(
+            [],
+            [initial],
+            new OperationGraph(
+                [parameter],
+                [consumer],
+                []),
+            []);
+        var program = new BuildProgram(
+            [target],
+            [new InitialValue<string>(initial, "0")]);
+
+        var result = AsciiGraphWriter.Render(
+            program,
+            valueLabelProvider: value =>
+                ReferenceEquals(value, initial)
+                    ? "$(X)#0"
+                    : ReferenceEquals(value, parameter)
+                        ? "$(X)#1"
+                        : null);
+
+        Assert.Contains(
+            result.Split(Environment.NewLine),
+            line => line.Contains("│ 0 ", StringComparison.Ordinal));
+        Assert.Contains("$(X)#0", result);
+        Assert.DoesNotContain("│ $(X)#0 │", result);
+    }
+
+    [Fact]
+    public void ExpandedBuildProgramLabelsSharedValueOnceAtProducer()
+    {
+        var shared = new Value<string>();
+        var producer = new TestOperation([], [shared]);
+        var firstConsumer = new TestOperation([shared], []);
+        var secondConsumer = new TestOperation([shared], []);
+        var target = new Target(
+            new OperationGraph(
+                [producer, firstConsumer, secondConsumer]));
+
+        var result = AsciiGraphWriter.Render(
+            new BuildProgram([target]),
+            valueLabelProvider: value =>
+                ReferenceEquals(value, shared)
+                    ? "$(X)#1"
+                    : null);
+
+        Assert.Equal(1, CountOccurrences(result, "$(X)#1"));
+        Assert.Contains("i0", result);
+    }
+
+    [Fact]
+    public void ExpandedBuildProgramSeparatesMultipleOutputValueLabels()
+    {
+        var first = new Value<string>();
+        var second = new Value<string>();
+        var producer = new TestOperation([], [first, second]);
+        var firstConsumer = new TestOperation([first], []);
+        var secondConsumer = new TestOperation([second], []);
+        var target = new Target(
+            new OperationGraph(
+                [producer, firstConsumer, secondConsumer]));
+
+        var result = AsciiGraphWriter.Render(
+            new BuildProgram([target]),
+            valueLabelProvider: value =>
+                ReferenceEquals(value, first)
+                    ? "$(FirstProperty)#12"
+                    : ReferenceEquals(value, second)
+                        ? "$(SecondProperty)#34"
+                        : null);
+
+        Assert.Contains("$(FirstProperty)#12", result);
+        Assert.Contains("$(SecondProperty)#34", result);
+        Assert.DoesNotContain(
+            "$(FirstProperty)#12$(SecondProperty)#34",
+            result);
     }
 
     [Fact]
@@ -283,12 +392,24 @@ public sealed class AsciiGraphWriterTests
                             ? "false branch"
                             : null);
 
-        Assert.Contains("─ true ─", result);
-        Assert.Contains("─ false ─", result);
+        Assert.Contains("true", result);
+        Assert.Contains("false", result);
         Assert.Contains('┬', result);
         Assert.Contains('┴', result);
+        Assert.Contains('═', result);
+        Assert.Contains('║', result);
+        Assert.Contains('╦', result);
+        Assert.Contains('╩', result);
+        Assert.Contains('╥', result);
+        Assert.Contains('╨', result);
+        Assert.DoesNotContain('╫', result);
+        Assert.Contains('◆', result);
         Assert.DoesNotContain("then", result);
         Assert.DoesNotContain("else", result);
+        Assert.DoesNotContain("─ true ", result);
+        Assert.DoesNotContain("─ false ", result);
+        Assert.Contains("│ true", result);
+        Assert.Contains("│ false", result);
         Assert.Contains("i0", result);
         Assert.Contains("i1", result);
         Assert.Contains("o0", result);

@@ -44,7 +44,10 @@ internal static class CliRunner
                 result.Program,
                 Console.Out,
                 targetNames,
-                GetOperationLabel);
+                operation => GetOperationLabel(
+                    operation,
+                    result.ValueSymbols),
+                value => GetValueLabel(value, result.ValueSymbols));
 
             var values = new ValueStore();
             var executor = new BuildProgramExecutor(
@@ -128,7 +131,9 @@ internal static class CliRunner
             ? string.Join("; ", values.Get(value))
             : "(unavailable)";
 
-    private static string? GetOperationLabel(Operation operation)
+    private static string? GetOperationLabel(
+        Operation operation,
+        IReadOnlyDictionary<Value, IReadOnlyList<ValueSymbol>> valueSymbols)
     {
         if (operation is IConstantOperation constant)
         {
@@ -143,11 +148,6 @@ internal static class CliRunner
         if (operation is ConditionalRegionOperation)
         {
             return "if";
-        }
-
-        if (operation is IStateBindingOperation)
-        {
-            return "state read";
         }
 
         if (!operation.GetType().IsGenericType)
@@ -179,4 +179,11 @@ internal static class CliRunner
                 value.ToString(format: null, CultureInfo.InvariantCulture),
             _ => content.ToString() ?? string.Empty,
         };
+
+    private static string? GetValueLabel(
+        Value value,
+        IReadOnlyDictionary<Value, IReadOnlyList<ValueSymbol>> valueSymbols) =>
+        valueSymbols.TryGetValue(value, out var symbols)
+            ? string.Join(", ", symbols.Select(static symbol => symbol.ToString()))
+            : null;
 }
