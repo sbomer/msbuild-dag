@@ -283,9 +283,14 @@ public sealed class AsciiGraphWriterTests
                             ? "false branch"
                             : null);
 
-        Assert.Contains("then", result);
-        Assert.Contains("else", result);
+        Assert.Contains("─ true ─", result);
+        Assert.Contains("─ false ─", result);
+        Assert.Contains('┬', result);
+        Assert.Contains('┴', result);
+        Assert.DoesNotContain("then", result);
+        Assert.DoesNotContain("else", result);
         Assert.Contains("i0", result);
+        Assert.Contains("i1", result);
         Assert.Contains("o0", result);
         Assert.Contains("true branch", result);
         Assert.Contains("false branch", result);

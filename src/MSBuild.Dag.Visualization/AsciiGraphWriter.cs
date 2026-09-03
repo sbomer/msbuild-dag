@@ -156,7 +156,8 @@ public static class AsciiGraphWriter
     private static GraphNodeContent RenderSignedGraph(
         OperationGraph graph,
         Func<Operation, string?>? operationLabelProvider,
-        bool labelBoundaries)
+        bool labelBoundaries,
+        int inputLabelOffset = 0)
     {
         if (graph.Inputs.Count == 0 &&
             graph.Operations.Count == 0 &&
@@ -171,14 +172,16 @@ public static class AsciiGraphWriter
         var adapter = TargetBodyRenderingAdapter.Create(
             graph,
             operationLabelProvider,
-            labelBoundaries);
+            labelBoundaries,
+            inputLabelOffset);
         var layout = Layout.Create(
             adapter.Graph,
             adapter.GetLabel,
             operation => RenderOperationContent(
                 operation,
                 operationLabelProvider),
-            renderDanglingOutputs: false);
+            renderDanglingOutputs: false,
+            preserveBoundaryOrder: labelBoundaries);
         using var writer = new StringWriter(CultureInfo.InvariantCulture);
 
         WriteLayout(layout, writer);
@@ -208,23 +211,55 @@ public static class AsciiGraphWriter
         var whenTrue = RenderSignedGraph(
             conditional.WhenTrue,
             operationLabelProvider,
-            labelBoundaries: true);
+            labelBoundaries: true,
+            inputLabelOffset: 1);
         var whenFalse = RenderSignedGraph(
             conditional.WhenFalse,
             operationLabelProvider,
-            labelBoundaries: true);
-        var lines = new List<string>
+            labelBoundaries: true,
+            inputLabelOffset: 1);
+        var whenTrueWidth = Math.Max(
+            " true ".Length,
+            whenTrue.Lines.Select(static line => line.Length).DefaultIfEmpty().Max());
+        var whenFalseWidth = Math.Max(
+            " false ".Length,
+            whenFalse.Lines.Select(static line => line.Length).DefaultIfEmpty().Max());
+        var branchHeight = Math.Max(
+            whenTrue.Lines.Count,
+            whenFalse.Lines.Count);
+        var lines = new List<string>(branchHeight + 2)
         {
-            "then",
+            $"┌{CreateHeader("true", whenTrueWidth + 2)}" +
+            $"┬{CreateHeader("false", whenFalseWidth + 2)}┐",
         };
-        lines.AddRange(Indent(whenTrue.Lines));
-        lines.Add("else");
-        lines.AddRange(Indent(whenFalse.Lines));
+
+        for (var index = 0; index < branchHeight; index++)
+        {
+            var trueLine = index < whenTrue.Lines.Count
+                ? whenTrue.Lines[index]
+                : string.Empty;
+            var falseLine = index < whenFalse.Lines.Count
+                ? whenFalse.Lines[index]
+                : string.Empty;
+            lines.Add(
+                $"│ {trueLine.PadRight(whenTrueWidth)} " +
+                $"│ {falseLine.PadRight(whenFalseWidth)} │");
+        }
+
+        lines.Add(
+            $"└{new string('─', whenTrueWidth + 2)}" +
+            $"┴{new string('─', whenFalseWidth + 2)}┘");
 
         return new GraphNodeContent(lines, [], []);
 
-        static IEnumerable<string> Indent(IEnumerable<string> lines) =>
-            lines.Select(line => $"  {line}");
+        static string CreateHeader(string label, int width)
+        {
+            var text = $" {label} ";
+            var left = (width - text.Length) / 2;
+            return new string('─', left) +
+                text +
+                new string('─', width - text.Length - left);
+        }
     }
 
     private static void WriteLayout(Layout layout, TextWriter writer)
@@ -527,7 +562,8 @@ public static class AsciiGraphWriter
             OperationGraph graph,
             Func<Operation, string>? labelProvider,
             Func<Operation, GraphNodeContent?>? contentProvider,
-            bool renderDanglingOutputs = true)
+            bool renderDanglingOutputs = true,
+            bool preserveBoundaryOrder = false)
         {
             var operationNodes =
                 new Dictionary<Operation, Node>(ReferenceEqualityComparer.Instance);
@@ -707,10 +743,16 @@ public static class AsciiGraphWriter
 
             foreach (var rank in ranks)
             {
-                var rankNodes = rank
-                    .OrderBy(node => GetOrderingHint(node, edges))
-                    .ThenBy(node => node.Order)
-                    .ToArray();
+                var rankNodes =
+                    preserveBoundaryOrder &&
+                    rank.All(
+                        node => node.Kind is
+                            NodeKind.TargetInput or NodeKind.TargetOutput)
+                        ? rank.OrderBy(node => node.Order).ToArray()
+                        : rank
+                            .OrderBy(node => GetOrderingHint(node, edges))
+                            .ThenBy(node => node.Order)
+                            .ToArray();
                 var left =
                     (contentWidth - rowWidths[rank.Key]) / 2;
 
@@ -734,7 +776,8 @@ public static class AsciiGraphWriter
                 ranks,
                 edges,
                 rowWidths,
-                contentWidth);
+                contentWidth,
+                preserveBoundaryOrder);
 
             var routeLaneCounts = AssignRouteLanes(ranks, edges);
 
@@ -800,7 +843,8 @@ public static class AsciiGraphWriter
             IReadOnlyList<IGrouping<int, Node>> ranks,
             IReadOnlyList<Edge> edges,
             IReadOnlyDictionary<int, int> rowWidths,
-            int contentWidth)
+            int contentWidth,
+            bool preserveBoundaryOrder)
         {
             for (var rankIndex = ranks.Count - 2; rankIndex >= 0; rankIndex--)
             {
@@ -812,6 +856,15 @@ public static class AsciiGraphWriter
 
                 if (rankNodes.All(node => node.Kind is NodeKind.TargetInput))
                 {
+                    if (preserveBoundaryOrder)
+                    {
+                        PositionRank(
+                            rank.OrderBy(node => node.Order),
+                            rowWidths[rank.Key],
+                            contentWidth);
+                        continue;
+                    }
+
                     PositionTargetInputsTowardConsumers(
                         rank
                             .OrderBy(node => HasLongOutgoingEdge(node, edges))
@@ -823,14 +876,24 @@ public static class AsciiGraphWriter
                     continue;
                 }
 
-                var left =
-                    (contentWidth - rowWidths[rank.Key]) / 2;
+                PositionRank(
+                    rankNodes,
+                    rowWidths[rank.Key],
+                    contentWidth);
+            }
+        }
 
-                foreach (var node in rankNodes)
-                {
-                    node.Left = left;
-                    left += node.Width + HorizontalGap;
-                }
+        private static void PositionRank(
+            IEnumerable<Node> nodes,
+            int rowWidth,
+            int contentWidth)
+        {
+            var left = (contentWidth - rowWidth) / 2;
+
+            foreach (var node in nodes)
+            {
+                node.Left = left;
+                left += node.Width + HorizontalGap;
             }
         }
 

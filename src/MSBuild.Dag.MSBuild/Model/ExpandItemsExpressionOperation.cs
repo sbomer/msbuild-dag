@@ -9,31 +9,20 @@ public sealed record StringReplacement(
 public sealed class ExpandItemsExpressionOperation(
     Value<string> source,
     IReadOnlyList<StringReplacement> replacements,
-    OperationControl? control = null)
-    : Operation, IGuardedOperation, IOrderedOperation
+    Value<GuardToken>? guard = null)
+    : Operation, IGuardedOperation
 {
     public Value<string> Source { get; } = source;
 
     public IReadOnlyList<StringReplacement> Replacements { get; } =
         replacements.ToArray();
 
-    public Value<GuardToken>? Guard => control?.Guard;
-
-    public Value<OrderToken>? OrderInput => control?.OrderInput;
-
-    public Value<OrderToken>? OrderOutput => control?.OrderOutput;
+    public Value<GuardToken>? Guard { get; } = guard;
 
     public Value<IReadOnlyList<string>> Result { get; } = new();
 
     public override IReadOnlyList<Value> Inputs =>
-        (Guard, OrderInput) switch
-        {
-            (not null, not null) => [OrderInput, Guard, Source],
-            (not null, null) => [Guard, Source],
-            (null, not null) => [OrderInput, Source],
-            _ => [Source],
-        };
+        Guard is null ? [Source] : [Guard, Source];
 
-    public override IReadOnlyList<Value> Outputs =>
-        OrderOutput is null ? [Result] : [OrderOutput, Result];
+    public override IReadOnlyList<Value> Outputs => [Result];
 }

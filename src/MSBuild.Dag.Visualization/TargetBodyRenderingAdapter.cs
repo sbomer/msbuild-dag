@@ -46,7 +46,8 @@ internal sealed class TargetBodyRenderingAdapter
     public static TargetBodyRenderingAdapter Create(
         OperationGraph graph,
         Func<Operation, string?>? labelProvider,
-        bool labelBoundaries)
+        bool labelBoundaries,
+        int inputLabelOffset = 0)
     {
         var operations = new List<Operation>(
             graph.Inputs.Count +
@@ -62,7 +63,11 @@ internal sealed class TargetBodyRenderingAdapter
             var input = new TargetInputBoundaryOperation(graph.Inputs[index]);
             operations.Add(input);
             inputs.Add(input);
-            labels.Add(input, labelBoundaries ? $"i{index}" : string.Empty);
+            labels.Add(
+                input,
+                labelBoundaries
+                    ? $"i{index + inputLabelOffset}"
+                    : string.Empty);
         }
 
         operations.AddRange(graph.Operations);

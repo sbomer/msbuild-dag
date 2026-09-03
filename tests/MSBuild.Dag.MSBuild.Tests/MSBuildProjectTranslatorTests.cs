@@ -68,9 +68,7 @@ public sealed class MSBuildProjectTranslatorTests
 
         Assert.Equal(2, graph.GetDependencies(compile).Count);
         Assert.Null(configuration.Guard);
-        Assert.Null(configuration.OrderInput);
-        Assert.Same(configuration.OrderOutput, configuration.Outputs[0]);
-        Assert.Same(configuration.Result, configuration.Outputs[1]);
+        Assert.Equal([configuration.Result], configuration.Outputs);
 
         var appendedItems = Assert.Single(
             collectSources.Body.Operations
@@ -78,9 +76,7 @@ public sealed class MSBuildProjectTranslatorTests
             operation => operation.Content.SequenceEqual(["Generated.cs"]));
 
         Assert.Null(appendedItems.Guard);
-        Assert.Null(appendedItems.OrderInput);
-        Assert.Same(appendedItems.OrderOutput, appendedItems.Outputs[0]);
-        Assert.Same(appendedItems.Result, appendedItems.Outputs[1]);
+        Assert.Equal([appendedItems.Result], appendedItems.Outputs);
 
         Assert.Null(compile.OrderInput);
         Assert.Same(compile.OrderOutput, compile.Outputs[0]);
@@ -346,6 +342,10 @@ public sealed class MSBuildProjectTranslatorTests
         var build = result.Targets["Build"];
         var conditional = Assert.Single(
             build.Body.Operations.OfType<ConditionalRegionOperation>());
+        var assignedValues = build.Body.Operations
+            .OfType<ConstantOperation<string>>()
+            .Where(operation => operation.Content is "A" or "B")
+            .ToArray();
         var values = new ValueStore();
 
         await new BuildProgramExecutor(
@@ -355,6 +355,10 @@ public sealed class MSBuildProjectTranslatorTests
             .ExecuteAsync(build);
 
         Assert.Equal(2, conditional.Outputs.Count);
+        Assert.Equal(2, assignedValues.Length);
+        Assert.All(
+            assignedValues,
+            operation => Assert.IsNotAssignableFrom<IOrderedOperation>(operation));
         Assert.Equal(expectedX, values.Get(result.Properties["X"]));
         Assert.Equal(expectedY, values.Get(result.Properties["Y"]));
     }
@@ -559,7 +563,8 @@ public sealed class MSBuildProjectTranslatorTests
             .ExecuteAsync(build);
 
         Assert.Equal(2, messages.Length);
-        Assert.Same(first.OrderOutput, secondText.OrderInput);
+        Assert.IsNotAssignableFrom<IOrderedOperation>(secondText);
+        Assert.Same(first.OrderOutput, second.OrderInput);
         Assert.Same(
             result.Definition.Evaluation.Initializations.Single(
                 initialization => ReferenceEquals(

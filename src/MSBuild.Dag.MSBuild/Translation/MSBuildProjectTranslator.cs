@@ -880,7 +880,7 @@ public sealed class MSBuildProjectTranslator
                     [],
                     [elsePrevious]),
                 [result]);
-            context.AddOperation(conditional, ordered: false);
+            context.AddOperation(conditional);
             context.Properties[property.Name] = result;
         }
     }
@@ -947,7 +947,7 @@ public sealed class MSBuildProjectTranslator
                 [],
                 whenFalseOutputs),
             outputs);
-        context.AddOperation(conditional, ordered: false);
+        context.AddOperation(conditional);
 
         foreach (var property in properties)
         {
@@ -989,7 +989,7 @@ public sealed class MSBuildProjectTranslator
                 var exclude = new ExcludeItemsOperation(
                     appendedItems,
                     excludedItems,
-                    context.CreateControl());
+                    context.TargetGuard);
                 context.AddOperation(exclude);
                 appendedItems = exclude.Result;
             }
@@ -997,7 +997,7 @@ public sealed class MSBuildProjectTranslator
             var concat = new ConcatItemsOperation(
                 existingItems,
                 appendedItems,
-                context.CreateControl());
+                context.TargetGuard);
 
             context.AddOperation(concat);
             context.Items[item.ItemType] = concat.Result;
@@ -1199,7 +1199,7 @@ public sealed class MSBuildProjectTranslator
 
         public Value<OrderToken>? CurrentOrderToken { get; private set; }
 
-        private Value<GuardToken>? TargetGuard { get; set; }
+        public Value<GuardToken>? TargetGuard { get; private set; }
 
         public List<DagOperation> Operations { get; } = [];
 
@@ -1211,12 +1211,14 @@ public sealed class MSBuildProjectTranslator
                 CurrentOrderToken is null ? TargetGuard : null,
                 CurrentOrderToken);
 
-        public void AddOperation(DagOperation operation, bool ordered = true)
+        public void AddOperation(DagOperation operation)
         {
             Operations.Add(operation);
 
-            if (ordered &&
-                operation is IOrderedOperation { OrderOutput: not null } orderedOperation)
+            if (operation is IOrderedOperation
+                {
+                    OrderOutput: not null,
+                } orderedOperation)
             {
                 CurrentOrderToken = orderedOperation.OrderOutput;
             }
@@ -1239,9 +1241,7 @@ public sealed class MSBuildProjectTranslator
             }
 
             var left = GetProperty(match.Groups["property"].Value);
-            var right = AddConstant(
-                match.Groups["literal"].Value,
-                ordered: false);
+            var right = AddConstant(match.Groups["literal"].Value);
 
             DagOperation comparison = match.Groups["operator"].Value switch
             {
@@ -1251,7 +1251,7 @@ public sealed class MSBuildProjectTranslator
                     "The condition parser produced an unknown comparison operator."),
             };
 
-            AddOperation(comparison, ordered: false);
+            AddOperation(comparison);
 
             return comparison switch
             {
@@ -1292,7 +1292,7 @@ public sealed class MSBuildProjectTranslator
                 var operation = new ExpandItemsExpressionOperation(
                     GetProperty(propertyName),
                     replacements,
-                    CreateControl());
+                    TargetGuard);
                 AddOperation(operation);
                 return operation.Result;
             }
@@ -1330,12 +1330,12 @@ public sealed class MSBuildProjectTranslator
                 $"Property state '{propertyName}' was not declared as a target read.");
         }
 
-        private Value<T> AddConstant<T>(T content, bool ordered = true)
+        private Value<T> AddConstant<T>(T content)
         {
             var operation = new ConstantOperation<T>(
                 content,
-                ordered ? CreateControl() : null);
-            AddOperation(operation, ordered);
+                TargetGuard);
+            AddOperation(operation);
             return operation.Result;
         }
     }

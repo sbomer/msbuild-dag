@@ -9,35 +9,19 @@ public interface IConstantOperation
 
 public sealed class ConstantOperation<T>(
     T content,
-    OperationControl? control = null)
-    : Operation, IConstantOperation, IGuardedOperation, IOrderedOperation
+    Value<GuardToken>? guard = null)
+    : Operation, IConstantOperation, IGuardedOperation
 {
     public T Content { get; } = content;
 
     object? IConstantOperation.Content => Content;
 
-    public Value<GuardToken>? Guard => control?.Guard;
-
-    public Value<OrderToken>? OrderInput => control?.OrderInput;
-
-    public Value<OrderToken>? OrderOutput => control?.OrderOutput;
+    public Value<GuardToken>? Guard { get; } = guard;
 
     public Value<T> Result { get; } = new();
 
     public override IReadOnlyList<Value> Inputs =>
-        CreateInputs(Guard, OrderInput);
+        Guard is null ? [] : [Guard];
 
-    private static IReadOnlyList<Value> CreateInputs(
-        Value<GuardToken>? guard,
-        Value<OrderToken>? orderInput) =>
-        (guard, orderInput) switch
-        {
-            (not null, not null) => [orderInput, guard],
-            (not null, null) => [guard],
-            (null, not null) => [orderInput],
-            _ => [],
-        };
-
-    public override IReadOnlyList<Value> Outputs =>
-        OrderOutput is null ? [Result] : [OrderOutput, Result];
+    public override IReadOnlyList<Value> Outputs => [Result];
 }
