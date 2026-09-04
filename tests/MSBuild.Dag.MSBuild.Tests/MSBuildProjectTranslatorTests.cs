@@ -879,6 +879,33 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Fact]
+    public async Task InterpolatesPropertiesIntoItemIncludes()
+    {
+        var result = TranslateAsset(
+            "PropertyInterpolatedItemInclude.proj",
+            "Build");
+        var build = result.Targets["Build"];
+        var expansions = build.Body.Operations
+            .OfType<ExpandItemsExpressionOperation>()
+            .ToArray();
+        var values = new ValueStore();
+
+        await new BuildProgramExecutor(
+            result.Program,
+            values,
+            CreateEvaluator().EvaluateAsync)
+            .ExecuteAsync(build);
+
+        Assert.Equal(2, expansions.Length);
+        Assert.Equal(
+            ["Configuration=Debug"],
+            GetIdentities(values.Get(result.Items["CommonProp"])));
+        Assert.Equal(
+            ["prefix", "one", "two", "suffix"],
+            GetIdentities(values.Get(result.Items["Expanded"])));
+    }
+
+    [Fact]
     public async Task TranslatesAndExecutesMessageTasksInOrder()
     {
         var result = TranslateAsset("Message.proj", "Build");

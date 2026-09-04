@@ -1,0 +1,13 @@
+<Project>
+  <PropertyGroup>
+    <Configuration>Debug</Configuration>
+    <Names>one;two</Names>
+  </PropertyGroup>
+
+  <Target Name="Build">
+    <ItemGroup>
+      <CommonProp Include="Configuration=$(Configuration)" />
+      <Expanded Include="prefix;$(Names);suffix" />
+    </ItemGroup>
+  </Target>
+</Project>

@@ -670,11 +670,17 @@ public sealed class MSBuildProjectTranslator
 
         void AddItemExpressionRead(string expression)
         {
-            if (TryGetReference(expression, "@(", out var itemType))
+            foreach (Match match in s_itemReference.Matches(expression))
             {
-                AddItemRead(itemType);
+                AddItemRead(match.Groups["item"].Value);
             }
-            else if (TryParseUnescapeItemsExpression(
+
+            foreach (Match match in s_propertyReference.Matches(expression))
+            {
+                AddPropertyRead(match.Groups["property"].Value);
+            }
+
+            if (TryParseUnescapeItemsExpression(
                 expression,
                 out var propertyName,
                 out _))
@@ -1806,35 +1812,49 @@ public sealed class MSBuildProjectTranslator
                 return GetProperty(propertyName);
             }
 
-            var itemReferences = s_itemReference.Matches(expression);
+            var references = s_propertyReference.Matches(expression)
+                .Select(match => (Match: match, IsProperty: true))
+                .Concat(
+                    s_itemReference.Matches(expression)
+                        .Select(match => (Match: match, IsProperty: false)))
+                .OrderBy(reference => reference.Match.Index)
+                .ToArray();
 
-            if (itemReferences.Count > 0 &&
-                !s_propertyReference.IsMatch(expression) &&
-                !s_itemMetadataReference.IsMatch(expression))
+            if (references.Length > 0)
             {
                 Value<string>? result = null;
                 var position = 0;
 
-                foreach (Match itemReference in itemReferences)
+                foreach (var reference in references)
                 {
                     AppendLiteral(
-                        expression[position..itemReference.Index]);
+                        expression[position..reference.Match.Index]);
 
-                    var identities = new ProjectItemIdentitiesOperation(
-                        GetItems(itemReference.Groups["item"].Value),
-                        TargetGuard);
-                    var separator = new ConstantOperation<string>(
-                        ";",
-                        TargetGuard);
-                    var join = new JoinItemValuesOperation(
-                        identities.Result,
-                        separator.Result,
-                        TargetGuard);
-                    AddOperation(identities);
-                    AddOperation(separator);
-                    AddOperation(join);
-                    Append(join.Result);
-                    position = itemReference.Index + itemReference.Length;
+                    if (reference.IsProperty)
+                    {
+                        Append(
+                            GetProperty(
+                                reference.Match.Groups["property"].Value));
+                    }
+                    else
+                    {
+                        var identities = new ProjectItemIdentitiesOperation(
+                            GetItems(reference.Match.Groups["item"].Value),
+                            TargetGuard);
+                        var separator = new ConstantOperation<string>(
+                            ";",
+                            TargetGuard);
+                        var join = new JoinItemValuesOperation(
+                            identities.Result,
+                            separator.Result,
+                            TargetGuard);
+                        AddOperation(identities);
+                        AddOperation(separator);
+                        AddOperation(join);
+                        Append(join.Result);
+                    }
+
+                    position = reference.Match.Index + reference.Match.Length;
                 }
 
                 AppendLiteral(expression[position..]);
@@ -1842,6 +1862,12 @@ public sealed class MSBuildProjectTranslator
 
                 void AppendLiteral(string literal)
                 {
+                    if (ContainsReference(literal))
+                    {
+                        throw Unsupported(
+                            $"property expression '{expression}'");
+                    }
+
                     if (literal.Length > 0)
                     {
                         Append(AddConstant(literal));
@@ -1889,6 +1915,18 @@ public sealed class MSBuildProjectTranslator
                 var operation = new ExpandItemsExpressionOperation(
                     GetProperty(propertyName),
                     replacements,
+                    TargetGuard);
+                AddOperation(operation);
+                return operation.Result;
+            }
+
+            if (s_propertyReference.IsMatch(expression) &&
+                !s_itemReference.IsMatch(expression) &&
+                !s_itemMetadataReference.IsMatch(expression))
+            {
+                var operation = new ExpandItemsExpressionOperation(
+                    ResolvePropertyExpression(expression),
+                    [],
                     TargetGuard);
                 AddOperation(operation);
                 return operation.Result;
