@@ -5,6 +5,12 @@
     <Build>true</Build>
     <Rebuild>false</Rebuild>
     <Phrase>foo and bar</Phrase>
+    <OrLeft>false</OrLeft>
+    <OrRight>true</OrRight>
+    <PhraseOr>foo or bar</PhraseOr>
+    <PrecedenceA>false</PrecedenceA>
+    <PrecedenceB>true</PrecedenceB>
+    <PrecedenceC>true</PrecedenceC>
   </PropertyGroup>
 
   <ItemGroup>
@@ -23,6 +29,14 @@
          Condition="'$(Build)' == 'true' and '$(Rebuild)' == 'true'" />
       <I Include="phrase"
          Condition="'$(Phrase)' == 'foo and bar'" />
+      <I Include="or"
+         Condition="'$(OrLeft)' == 'true' or '$(OrRight)' == 'true'" />
+      <I Include="or-false"
+         Condition="'$(OrLeft)' == 'true' or '$(OrRight)' != 'true'" />
+      <I Include="phrase-or"
+         Condition="'$(PhraseOr)' == 'foo or bar'" />
+      <I Include="precedence"
+         Condition="'$(PrecedenceA)' == 'true' and '$(PrecedenceB)' == 'true' or '$(PrecedenceC)' == 'true'" />
     </ItemGroup>
   </Target>
 </Project>

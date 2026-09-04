@@ -837,6 +837,9 @@ public sealed class MSBuildProjectTranslatorTests
         var conjunctions = build.Body.Operations
             .OfType<AndOperation>()
             .ToArray();
+        var disjunctions = build.Body.Operations
+            .OfType<OrOperation>()
+            .ToArray();
         var values = new ValueStore();
 
         await new BuildProgramExecutor(
@@ -845,10 +848,19 @@ public sealed class MSBuildProjectTranslatorTests
             CreateEvaluator().EvaluateAsync)
             .ExecuteAsync(build);
 
-        Assert.Equal(5, selects.Length);
-        Assert.Equal(2, conjunctions.Length);
+        Assert.Equal(9, selects.Length);
+        Assert.Equal(3, conjunctions.Length);
+        Assert.Equal(3, disjunctions.Length);
         Assert.Equal(
-            ["existing", "a", "build", "phrase"],
+            [
+                "existing",
+                "a",
+                "build",
+                "phrase",
+                "or",
+                "phrase-or",
+                "precedence",
+            ],
             GetIdentities(values.Get(result.Items["I"])));
     }
 
@@ -1041,6 +1053,15 @@ public sealed class MSBuildProjectTranslatorTests
                     values.Set(
                         operation.Result,
                         values.Get(operation.Left) &&
+                        values.Get(operation.Right));
+                    return ValueTask.CompletedTask;
+                })
+            .Add<OrOperation>(
+                static (operation, values, _) =>
+                {
+                    values.Set(
+                        operation.Result,
+                        values.Get(operation.Left) ||
                         values.Get(operation.Right));
                     return ValueTask.CompletedTask;
                 })

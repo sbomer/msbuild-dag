@@ -155,6 +155,11 @@ internal static class CliRunner
             return "and";
         }
 
+        if (operation is OrOperation)
+        {
+            return "or";
+        }
+
         if (operation is ProjectItemIdentitiesOperation)
         {
             return "identities";

@@ -15,6 +15,9 @@ public sealed class MSBuildProjectTranslator
     private static readonly Regex s_andCondition = new(
         @"^\s*(?<left>.+?)\s+and\s+(?<right>.+?)\s*$",
         RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+    private static readonly Regex s_orCondition = new(
+        @"^\s*(?<left>.+?)\s+or\s+(?<right>.+?)\s*$",
+        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
     private static readonly Regex s_itemIdentityCondition = new(
         @"^\s*'%\((?<item>[^.()]+)\.Identity\)'\s*==\s*'(?<literal>[^']*)'\s*$",
         RegexOptions.CultureInvariant);
@@ -643,6 +646,15 @@ public sealed class MSBuildProjectTranslator
                 return;
             }
 
+            var disjunction = s_orCondition.Match(expression);
+
+            if (disjunction.Success)
+            {
+                AddConditionRead(disjunction.Groups["left"].Value);
+                AddConditionRead(disjunction.Groups["right"].Value);
+                return;
+            }
+
             var conjunction = s_andCondition.Match(expression);
 
             if (conjunction.Success)
@@ -1238,6 +1250,17 @@ public sealed class MSBuildProjectTranslator
             return true;
         }
 
+        var disjunction = s_orCondition.Match(expression);
+
+        if (disjunction.Success)
+        {
+            return
+                IsScalarPropertyCondition(
+                    disjunction.Groups["left"].Value) &&
+                IsScalarPropertyCondition(
+                    disjunction.Groups["right"].Value);
+        }
+
         var conjunction = s_andCondition.Match(expression);
         return conjunction.Success &&
             IsScalarPropertyCondition(conjunction.Groups["left"].Value) &&
@@ -1753,6 +1776,19 @@ public sealed class MSBuildProjectTranslator
                     _ => throw new InvalidOperationException(
                         "The condition parser produced an unknown comparison operation."),
                 };
+            }
+
+            var disjunction = s_orCondition.Match(expression);
+
+            if (disjunction.Success)
+            {
+                var left = TranslateCondition(
+                    disjunction.Groups["left"].Value);
+                var right = TranslateCondition(
+                    disjunction.Groups["right"].Value);
+                var or = new OrOperation(left, right);
+                AddOperation(or);
+                return or.Result;
             }
 
             var conjunction = s_andCondition.Match(expression);
