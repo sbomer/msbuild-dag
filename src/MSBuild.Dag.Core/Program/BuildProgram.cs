@@ -20,7 +20,6 @@ public sealed partial class BuildProgram
         var operationOwners = RegisterTargets();
         ValidateInitialValues(operationOwners);
         ValidateTargetReferences();
-        EnsureOrchestrationAcyclic();
         ValidateCrossTargetConnections(operationOwners);
         BuildPrecedence();
         EnsureAcyclic();

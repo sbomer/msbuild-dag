@@ -153,43 +153,6 @@ public sealed partial class BuildProgram
         }
     }
 
-    private void EnsureOrchestrationAcyclic()
-    {
-        var visiting = new HashSet<Target>(ReferenceEqualityComparer.Instance);
-        var visited = new HashSet<Target>(ReferenceEqualityComparer.Instance);
-
-        foreach (var target in Targets)
-        {
-            VisitOrchestration(target, visiting, visited);
-        }
-    }
-
-    private static void VisitOrchestration(
-        Target target,
-        HashSet<Target> visiting,
-        HashSet<Target> visited)
-    {
-        if (visited.Contains(target))
-        {
-            return;
-        }
-
-        if (!visiting.Add(target))
-        {
-            throw new ArgumentException(
-                "Target orchestration must be acyclic.",
-                nameof(Targets));
-        }
-
-        foreach (var referencedTarget in target.Prelude.Concat(target.Epilogue))
-        {
-            VisitOrchestration(referencedTarget, visiting, visited);
-        }
-
-        visiting.Remove(target);
-        visited.Add(target);
-    }
-
     private void ValidateCrossTargetConnections(
         IReadOnlyDictionary<Operation, Target> operationOwners)
     {
@@ -255,9 +218,12 @@ public sealed partial class BuildProgram
 
         foreach (var target in Targets)
         {
-            var sequence = GetExecutionSequence(target);
+            var sequence = target.Prelude
+                .Append(target)
+                .Concat(target.Epilogue)
+                .ToArray();
 
-            for (var index = 1; index < sequence.Count; index++)
+            for (var index = 1; index < sequence.Length; index++)
             {
                 AddPrecedence(
                     sequence[index - 1],
@@ -272,36 +238,6 @@ public sealed partial class BuildProgram
             _orderPredecessors.Add(
                 target,
                 orderPredecessors[target].ToArray());
-        }
-
-        IReadOnlyList<Target> GetExecutionSequence(Target requestedTarget)
-        {
-            var sequence = new List<Target>();
-            var ensured = new HashSet<Target>(
-                ReferenceEqualityComparer.Instance);
-
-            Ensure(requestedTarget);
-            return sequence;
-
-            void Ensure(Target target)
-            {
-                if (!ensured.Add(target))
-                {
-                    return;
-                }
-
-                foreach (var preludeTarget in target.Prelude)
-                {
-                    Ensure(preludeTarget);
-                }
-
-                sequence.Add(target);
-
-                foreach (var epilogueTarget in target.Epilogue)
-                {
-                    Ensure(epilogueTarget);
-                }
-            }
         }
 
         void AddPrecedence(

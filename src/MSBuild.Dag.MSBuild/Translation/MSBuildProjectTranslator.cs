@@ -242,7 +242,39 @@ public sealed class MSBuildProjectTranslator
 
         foreach (var sourceTarget in sourceTargets)
         {
-            CreateDefinition(sourceTarget);
+            var body = targetBodies[sourceTarget];
+            createdDefinitions.Add(
+                sourceTarget,
+                new TargetDefinition(
+                    [],
+                    body.Reads,
+                    body.Writes,
+                    body.Outputs,
+                    body.Graph,
+                    []));
+        }
+
+        var definitionPreludes = new Dictionary<
+            TargetDefinition,
+            IReadOnlyList<TargetDefinition>>(
+                ReferenceEqualityComparer.Instance);
+        var definitionEpilogues = new Dictionary<
+            TargetDefinition,
+            IReadOnlyList<TargetDefinition>>(
+                ReferenceEqualityComparer.Instance);
+
+        foreach (var sourceTarget in sourceTargets)
+        {
+            definitionPreludes.Add(
+                createdDefinitions[sourceTarget],
+                links.Preludes[sourceTarget]
+                    .Select(reference => createdDefinitions[reference])
+                    .ToArray());
+            definitionEpilogues.Add(
+                createdDefinitions[sourceTarget],
+                links.Epilogues[sourceTarget]
+                    .Select(reference => createdDefinitions[reference])
+                    .ToArray());
         }
 
         BuildLinkResult linked;
@@ -250,7 +282,9 @@ public sealed class MSBuildProjectTranslator
             evaluation,
             sourceTargets
                 .Select(target => createdDefinitions[target])
-                .ToArray());
+                .ToArray(),
+            definitionPreludes,
+            definitionEpilogues);
 
         try
         {
@@ -347,31 +381,6 @@ public sealed class MSBuildProjectTranslator
             valueSymbols.Build(),
             targetConditions,
             links.Warnings);
-
-        TargetDefinition CreateDefinition(MSBuildTarget sourceTarget)
-        {
-            if (createdDefinitions.TryGetValue(
-                sourceTarget,
-                out var existing))
-            {
-                return existing;
-            }
-
-            var body = targetBodies[sourceTarget];
-            var definition = new TargetDefinition(
-                links.Preludes[sourceTarget]
-                    .Select(CreateDefinition)
-                    .ToArray(),
-                body.Reads,
-                body.Writes,
-                body.Outputs,
-                body.Graph,
-                links.Epilogues[sourceTarget]
-                    .Select(CreateDefinition)
-                    .ToArray());
-            createdDefinitions.Add(sourceTarget, definition);
-            return definition;
-        }
 
         string GetTargetName(TargetDefinition definition)
         {
@@ -481,64 +490,11 @@ public sealed class MSBuildProjectTranslator
             reportWarning?.Invoke(warning);
         }
 
-        EnsureSourceOrchestrationAcyclic(targets, preludes, epilogues);
-
         return new TargetLinks(
             CopyLists(preludes),
             CopyLists(epilogues),
             warnings,
             missingDependencies);
-    }
-
-    private static void EnsureSourceOrchestrationAcyclic(
-        IReadOnlyList<MSBuildTarget> targets,
-        IReadOnlyDictionary<MSBuildTarget, List<MSBuildTarget>> preludes,
-        IReadOnlyDictionary<MSBuildTarget, List<MSBuildTarget>> epilogues)
-    {
-        var visiting = new HashSet<MSBuildTarget>(
-            ReferenceEqualityComparer.Instance);
-        var visited = new HashSet<MSBuildTarget>(
-            ReferenceEqualityComparer.Instance);
-        var path = new List<MSBuildTarget>();
-
-        foreach (var target in targets)
-        {
-            Visit(target);
-        }
-
-        void Visit(MSBuildTarget target)
-        {
-            if (visited.Contains(target))
-            {
-                return;
-            }
-
-            if (!visiting.Add(target))
-            {
-                var start = path.FindIndex(
-                    candidate => ReferenceEquals(candidate, target));
-                var cycle = path.Skip(start).Append(target);
-
-                throw new InvalidOperationException(
-                    "Target orchestration must be acyclic. Cycle: " +
-                    string.Join(
-                        " -> ",
-                        cycle.Select(candidate => $"'{candidate.Name}'")) +
-                    ".");
-            }
-
-            path.Add(target);
-
-            foreach (var referencedTarget in
-                preludes[target].Concat(epilogues[target]))
-            {
-                Visit(referencedTarget);
-            }
-
-            path.RemoveAt(path.Count - 1);
-            visiting.Remove(target);
-            visited.Add(target);
-        }
     }
 
     private static TargetStateAccess GetTargetStateAccess(MSBuildTarget target)

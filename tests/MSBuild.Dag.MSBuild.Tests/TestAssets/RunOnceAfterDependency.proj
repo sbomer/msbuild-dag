@@ -1,0 +1,16 @@
+<Project>
+  <Target Name="A">
+    <Message Text="A" />
+  </Target>
+
+  <Target Name="B"
+          AfterTargets="A"
+          DependsOnTargets="C">
+    <Message Text="B" />
+  </Target>
+
+  <Target Name="C"
+          DependsOnTargets="A">
+    <Message Text="C" />
+  </Target>
+</Project>

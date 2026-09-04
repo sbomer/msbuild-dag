@@ -1,6 +1,0 @@
-<Project>
-  <Target Name="First"
-          AfterTargets="Second" />
-  <Target Name="Second"
-          BeforeTargets="First" />
-</Project>

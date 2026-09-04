@@ -103,7 +103,7 @@ public sealed partial class Target
     {
     }
 
-    public IReadOnlyList<Target> Prelude { get; }
+    public IReadOnlyList<Target> Prelude { get; private set; }
 
     public IReadOnlyList<Value> Inputs { get; }
 
@@ -111,7 +111,15 @@ public sealed partial class Target
 
     public OperationGraph Body { get; }
 
-    public IReadOnlyList<Target> Epilogue { get; }
+    public IReadOnlyList<Target> Epilogue { get; private set; }
+
+    internal void SetOrchestration(
+        IReadOnlyList<Target> prelude,
+        IReadOnlyList<Target> epilogue)
+    {
+        Prelude = CopyTargets(prelude, nameof(prelude));
+        Epilogue = CopyTargets(epilogue, nameof(epilogue));
+    }
 
     private static Target[] CopyTargets(
         IReadOnlyList<Target> targets,

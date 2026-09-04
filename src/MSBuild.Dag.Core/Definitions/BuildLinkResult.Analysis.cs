@@ -24,21 +24,27 @@ public sealed partial class BuildLinkResult
                 initialization.InitialValue.Value);
         }
 
-        var ensured = new HashSet<TargetDefinition>(
+        var activated = new HashSet<TargetDefinition>(
             ReferenceEqualityComparer.Instance);
-        Ensure(requestedTarget);
-        return state;
+        Activate(requestedTarget);
+        var completed = new HashSet<Target>(
+            ReferenceEqualityComparer.Instance);
+        var remaining = new HashSet<TargetDefinition>(
+            activated,
+            ReferenceEqualityComparer.Instance);
 
-        void Ensure(TargetDefinition target)
+        while (remaining.Count > 0)
         {
-            if (!ensured.Add(target))
-            {
-                return;
-            }
+            var target = _definitions.FirstOrDefault(
+                candidate =>
+                    remaining.Contains(candidate) &&
+                    Program.GetPredecessors(Targets[candidate])
+                        .All(completed.Contains));
 
-            foreach (var preludeTarget in target.Prelude)
+            if (target is null)
             {
-                Ensure(preludeTarget);
+                throw new InvalidOperationException(
+                    "The activated target definitions cannot be ordered.");
             }
 
             foreach (var write in target.Writes)
@@ -50,9 +56,24 @@ public sealed partial class BuildLinkResult
                 state[write.Location] = linkedTarget.Outputs[outputIndex];
             }
 
-            foreach (var epilogueTarget in target.Epilogue)
+            completed.Add(Targets[target]);
+            remaining.Remove(target);
+        }
+
+        return state;
+
+        void Activate(TargetDefinition target)
+        {
+            if (!activated.Add(target))
             {
-                Ensure(epilogueTarget);
+                return;
+            }
+
+            foreach (var referencedTarget in
+                _definition.GetPrelude(target)
+                    .Concat(_definition.GetEpilogue(target)))
+            {
+                Activate(referencedTarget);
             }
         }
 

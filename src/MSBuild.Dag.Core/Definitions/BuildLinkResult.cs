@@ -4,17 +4,18 @@ public sealed partial class BuildLinkResult
 {
     private readonly EvaluationSnapshot _evaluation;
     private readonly IReadOnlyList<TargetDefinition> _definitions;
+    private readonly BuildDefinition _definition;
 
     internal BuildLinkResult(
         BuildProgram program,
         IReadOnlyDictionary<TargetDefinition, Target> targets,
-        EvaluationSnapshot evaluation,
-        IReadOnlyList<TargetDefinition> definitions)
+        BuildDefinition definition)
     {
         Program = program;
         Targets = targets;
-        _evaluation = evaluation;
-        _definitions = definitions;
+        _definition = definition;
+        _evaluation = definition.Evaluation;
+        _definitions = definition.Targets;
     }
 
     public BuildProgram Program { get; }

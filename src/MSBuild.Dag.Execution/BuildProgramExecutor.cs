@@ -63,7 +63,28 @@ public sealed class BuildProgramExecutor
             }
         }
 
-        await EnsureAsync(requestedTarget);
+        var remaining = new HashSet<Target>(
+            activated.Where(target => !_completed.Contains(target)),
+            ReferenceEqualityComparer.Instance);
+
+        while (remaining.Count > 0)
+        {
+            var target = _program.Targets.FirstOrDefault(
+                candidate =>
+                    remaining.Contains(candidate) &&
+                    _program.GetPredecessors(candidate)
+                        .All(_completed.Contains));
+
+            if (target is null)
+            {
+                throw new InvalidOperationException(
+                    "The activated targets cannot be scheduled in program order.");
+            }
+
+            await ExecuteBodyAsync(target);
+            _completed.Add(target);
+            remaining.Remove(target);
+        }
 
         HashSet<Target> GetActivatedTargets(Target target)
         {
@@ -88,18 +109,8 @@ public sealed class BuildProgramExecutor
             }
         }
 
-        async ValueTask EnsureAsync(Target target)
+        async ValueTask ExecuteBodyAsync(Target target)
         {
-            if (_completed.Contains(target))
-            {
-                return;
-            }
-
-            foreach (var preludeTarget in target.Prelude)
-            {
-                await EnsureAsync(preludeTarget);
-            }
-
             for (var index = 0; index < target.Inputs.Count; index++)
             {
                 if (!ReferenceEquals(
@@ -124,13 +135,6 @@ public sealed class BuildProgramExecutor
                     target.Body.Outputs[index],
                     target.Outputs[index]);
             }
-
-            foreach (var epilogueTarget in target.Epilogue)
-            {
-                await EnsureAsync(epilogueTarget);
-            }
-
-            _completed.Add(target);
         }
     }
 }

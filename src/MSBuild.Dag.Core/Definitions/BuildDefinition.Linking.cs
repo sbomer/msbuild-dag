@@ -20,7 +20,6 @@ public sealed partial class BuildDefinition
         }
 
         ValidateReferences(targetSet);
-        EnsureOrchestrationAcyclic();
 
         var dependencies = BuildOrderDependencies();
         var linkOrder = GetLinkOrder(dependencies);
@@ -92,7 +91,26 @@ public sealed partial class BuildDefinition
 
         foreach (var target in Targets)
         {
-            CreateTarget(target);
+            var linkedBody = linkedBodies[target];
+            linkedTargets.Add(
+                target,
+                new Target(
+                    [],
+                    linkedBody.Inputs,
+                    linkedBody.Graph,
+                    linkedBody.Outputs,
+                    []));
+        }
+
+        foreach (var target in Targets)
+        {
+            linkedTargets[target].SetOrchestration(
+                GetPrelude(target)
+                    .Select(reference => linkedTargets[reference])
+                    .ToArray(),
+                GetEpilogue(target)
+                    .Select(reference => linkedTargets[reference])
+                    .ToArray());
         }
 
         var program = new BuildProgram(
@@ -106,26 +124,7 @@ public sealed partial class BuildDefinition
             new Dictionary<TargetDefinition, Target>(
                 linkedTargets,
                 ReferenceEqualityComparer.Instance),
-            Evaluation,
-            Targets);
-
-        Target CreateTarget(TargetDefinition definition)
-        {
-            if (linkedTargets.TryGetValue(definition, out var existing))
-            {
-                return existing;
-            }
-
-            var linkedBody = linkedBodies[definition];
-            var target = new Target(
-                definition.Prelude.Select(CreateTarget).ToArray(),
-                linkedBody.Inputs,
-                linkedBody.Graph,
-                linkedBody.Outputs,
-                definition.Epilogue.Select(CreateTarget).ToArray());
-            linkedTargets.Add(definition, target);
-            return target;
-        }
+            this);
     }
 
     private void ValidateReferences(
@@ -134,7 +133,7 @@ public sealed partial class BuildDefinition
         foreach (var target in Targets)
         {
             foreach (var referencedTarget in
-                target.Prelude.Concat(target.Epilogue))
+                GetPrelude(target).Concat(GetEpilogue(target)))
             {
                 if (!targets.Contains(referencedTarget))
                 {
@@ -143,43 +142,6 @@ public sealed partial class BuildDefinition
                         nameof(Targets));
                 }
             }
-        }
-    }
-
-    private void EnsureOrchestrationAcyclic()
-    {
-        var visiting = new HashSet<TargetDefinition>(
-            ReferenceEqualityComparer.Instance);
-        var visited = new HashSet<TargetDefinition>(
-            ReferenceEqualityComparer.Instance);
-
-        foreach (var target in Targets)
-        {
-            Visit(target);
-        }
-
-        void Visit(TargetDefinition target)
-        {
-            if (visited.Contains(target))
-            {
-                return;
-            }
-
-            if (!visiting.Add(target))
-            {
-                throw new ArgumentException(
-                    "Target-definition orchestration must be acyclic.",
-                    nameof(Targets));
-            }
-
-            foreach (var referencedTarget in
-                target.Prelude.Concat(target.Epilogue))
-            {
-                Visit(referencedTarget);
-            }
-
-            visiting.Remove(target);
-            visited.Add(target);
         }
     }
 
@@ -197,9 +159,12 @@ public sealed partial class BuildDefinition
 
         foreach (var target in Targets)
         {
-            var sequence = GetExecutionSequence(target);
+            var sequence = GetPrelude(target)
+                .Append(target)
+                .Concat(GetEpilogue(target))
+                .ToArray();
 
-            for (var index = 1; index < sequence.Count; index++)
+            for (var index = 1; index < sequence.Length; index++)
             {
                 var predecessors = dependencies[sequence[index]];
                 var predecessor = sequence[index - 1];
@@ -407,37 +372,6 @@ public sealed partial class BuildDefinition
 
         return Evaluation.GetInitialization(location)?.InitialValue.Value ??
             throw new MissingInitialStateException(target, location);
-    }
-
-    private IReadOnlyList<TargetDefinition> GetExecutionSequence(
-        TargetDefinition requestedTarget)
-    {
-        var sequence = new List<TargetDefinition>();
-        var ensured = new HashSet<TargetDefinition>(
-            ReferenceEqualityComparer.Instance);
-
-        Ensure(requestedTarget);
-        return sequence;
-
-        void Ensure(TargetDefinition target)
-        {
-            if (!ensured.Add(target))
-            {
-                return;
-            }
-
-            foreach (var preludeTarget in target.Prelude)
-            {
-                Ensure(preludeTarget);
-            }
-
-            sequence.Add(target);
-
-            foreach (var epilogueTarget in target.Epilogue)
-            {
-                Ensure(epilogueTarget);
-            }
-        }
     }
 
 }

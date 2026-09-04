@@ -140,21 +140,18 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Fact]
-    public void RejectsSdkStyleProjectWithGlobalTargetOrderCycle()
+    public void SdkStyleReferenceCycleDoesNotMaskUnsupportedConstruct()
     {
         var projectPath = Path.Combine(
             AppContext.BaseDirectory,
             "TestAssets",
             "SdkStyle.csproj");
 
-        var exception = Assert.Throws<InvalidOperationException>(
+        var exception = Assert.Throws<NotSupportedException>(
             () => new MSBuildProjectTranslator().Translate(projectPath, "Build"));
 
-        Assert.Contains("Target orchestration must be acyclic", exception.Message);
-        Assert.Contains(
-            "'Build' -> '_PackAsBuildAfterTarget' -> 'Pack' -> " +
-            "'GenerateNuspec' -> 'Build'",
-            exception.Message);
+        Assert.Contains("task conditions", exception.Message);
+        Assert.DoesNotContain("orchestration", exception.Message);
     }
 
     [Fact]
@@ -623,13 +620,30 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Fact]
-    public void RejectsOrchestrationCycles()
+    public async Task SeparatesActivationCyclesFromPrecedenceOrder()
     {
-        var exception = Assert.Throws<InvalidOperationException>(
-            () => TranslateAsset("OrchestrationCycle.proj", "First"));
+        var result = TranslateAsset("RunOnceAfterDependency.proj", "A");
+        var a = result.Targets["A"];
+        var b = result.Targets["B"];
+        var c = result.Targets["C"];
+        var messages = new List<string>();
 
-        Assert.Contains("orchestration", exception.Message);
-        Assert.Contains("acyclic", exception.Message);
+        Assert.Equal([b], a.Epilogue);
+        Assert.Equal([c], b.Prelude);
+        Assert.Equal([a], c.Prelude);
+        Assert.Contains(a, result.Program.GetOrderPredecessors(c));
+        Assert.Contains(c, result.Program.GetOrderPredecessors(b));
+
+        await new BuildProgramExecutor(
+            result.Program,
+            new ValueStore(),
+            CreateEvaluator(
+                onMessage: (operation, values) =>
+                    messages.Add(values.Get(operation.Text)))
+                .EvaluateAsync)
+            .ExecuteAsync(a);
+
+        Assert.Equal(["A", "C", "B"], messages);
     }
 
     [Fact]
