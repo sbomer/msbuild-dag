@@ -67,6 +67,94 @@ internal static class TranslatedOperationEvaluator
                             .ToArray());
                     return ValueTask.CompletedTask;
                 })
+            .Add<GetItemMetadataOperation>(
+                static (operation, values, _) =>
+                {
+                    values.Set(
+                        operation.Result,
+                        values.Get(operation.Items)
+                            .Select(item =>
+                                item.GetMetadataValue(operation.MetadataName))
+                            .ToArray());
+                    return ValueTask.CompletedTask;
+                })
+            .Add<SetItemMetadataOperation>(
+                static (operation, values, _) =>
+                {
+                    var items = values.Get(operation.Items);
+                    var metadataValues = values.Get(operation.MetadataValues);
+                    var mask = operation.Mask is null
+                        ? null
+                        : values.Get(operation.Mask);
+                    EnsureMatchingItemCounts(
+                        items.Count,
+                        metadataValues.Count,
+                        mask?.Count);
+                    values.Set(
+                        operation.Result,
+                        items.Select(
+                                (item, index) =>
+                                    mask is null || mask[index]
+                                        ? item.WithMetadata(
+                                            new Dictionary<string, string>(
+                                                StringComparer.OrdinalIgnoreCase)
+                                            {
+                                                [operation.MetadataName] =
+                                                    metadataValues[index],
+                                            })
+                                        : item)
+                            .ToArray());
+                    return ValueTask.CompletedTask;
+                })
+            .Add<BroadcastItemValueOperation<string>>(
+                static (operation, values, _) =>
+                {
+                    values.Set(
+                        operation.Result,
+                        Enumerable.Repeat(
+                                values.Get(operation.Value),
+                                values.Get(operation.Items).Count)
+                            .ToArray());
+                    return ValueTask.CompletedTask;
+                })
+            .Add<ConcatItemValuesOperation>(
+                static (operation, values, _) =>
+                {
+                    var left = values.Get(operation.Left);
+                    var right = values.Get(operation.Right);
+                    EnsureMatchingItemCounts(left.Count, right.Count);
+                    values.Set(
+                        operation.Result,
+                        left.Zip(
+                                right,
+                                static (leftValue, rightValue) =>
+                                    leftValue + rightValue)
+                            .ToArray());
+                    return ValueTask.CompletedTask;
+                })
+            .Add<EqualItemValuesOperation<string>>(
+                static (operation, values, _) =>
+                {
+                    values.Set(
+                        operation.Result,
+                        values.Get(operation.Values)
+                            .Select(value =>
+                                StringComparer.OrdinalIgnoreCase.Equals(
+                                    value,
+                                    values.Get(operation.Candidate)))
+                            .ToArray());
+                    return ValueTask.CompletedTask;
+                })
+            .Add<NotItemValuesOperation>(
+                static (operation, values, _) =>
+                {
+                    values.Set(
+                        operation.Result,
+                        values.Get(operation.Values)
+                            .Select(static value => !value)
+                            .ToArray());
+                    return ValueTask.CompletedTask;
+                })
             .Add<ProjectItemIdentitiesOperation>(
                 static (operation, values, _) =>
                 {
@@ -176,6 +264,17 @@ internal static class TranslatedOperationEvaluator
                         new GuardToken(values.Get(operation.Condition)));
                     return ValueTask.CompletedTask;
                 });
+
+    private static void EnsureMatchingItemCounts(
+        int expected,
+        params int?[] actualCounts)
+    {
+        if (actualCounts.Any(count => count is not null && count != expected))
+        {
+            throw new InvalidOperationException(
+                "Item-aligned values must have matching element counts.");
+        }
+    }
 
     public static ValueTask EvaluateAsync(
         Operation operation,

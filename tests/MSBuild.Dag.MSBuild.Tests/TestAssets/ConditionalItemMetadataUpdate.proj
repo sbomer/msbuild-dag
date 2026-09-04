@@ -1,0 +1,14 @@
+<Project>
+  <ItemGroup>
+    <SubsetName Include="clr" OnDemand="false" Text="- clr" />
+    <SubsetName Include="libs" OnDemand="true" Text="- libs" />
+  </ItemGroup>
+
+  <Target Name="Build">
+    <ItemGroup>
+      <SubsetName
+        Condition="'%(SubsetName.OnDemand)' == 'true'"
+        Text="%(Text) [only runs on demand]" />
+    </ItemGroup>
+  </Target>
+</Project>

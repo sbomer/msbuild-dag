@@ -1,8 +1,8 @@
 <Project>
-    <Target Name="Build">
-        <PropertyGroup Condition="'$(X)' == ''">
-            <X>A</X>
-            <Y>B</Y>
-        </PropertyGroup>
-    </Target>
+  <Target Name="Build">
+    <PropertyGroup Condition="'$(Condition)' == ''">
+        <X>A</X>
+        <Y>B</Y>
+    </PropertyGroup>
+  </Target>
 </Project>

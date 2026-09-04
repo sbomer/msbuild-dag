@@ -18,6 +18,12 @@ public sealed class MSBuildProjectTranslator
     private static readonly Regex s_itemListCondition = new(
         @"^\s*'@\((?<item>[^)]+)\)'\s*(?<operator>==|!=)\s*'(?<literal>[^']*)'\s*$",
         RegexOptions.CultureInvariant);
+    private static readonly Regex s_itemMetadataCondition = new(
+        @"^\s*'%\((?:(?<item>[^.()]+)\.)?(?<metadata>[^)]+)\)'\s*(?<operator>==|!=)\s*'(?<literal>[^']*)'\s*$",
+        RegexOptions.CultureInvariant);
+    private static readonly Regex s_itemMetadataReference = new(
+        @"%\((?:(?<item>[^.()]+)\.)?(?<metadata>[^)]+)\)",
+        RegexOptions.CultureInvariant);
     private static readonly Regex s_propertyReference = new(
         @"\$\((?<property>[^()]+)\)",
         RegexOptions.CultureInvariant);
@@ -1084,35 +1090,70 @@ public sealed class MSBuildProjectTranslator
 
         foreach (var item in itemGroup.Items)
         {
-            if (!string.IsNullOrWhiteSpace(item.Condition))
-            {
-                throw Unsupported(
-                    $"condition on item operation {FormatItemOperation(item)}");
-            }
-
             if (IsMetadataUpdate(item))
             {
                 if (item.Metadata.Any(
                     metadata =>
                         !string.IsNullOrWhiteSpace(metadata.Condition) ||
-                        ContainsUnsupportedMetadataReference(metadata.Value)))
+                        !IsSupportedMetadataExpression(
+                            item.ItemType,
+                            metadata.Value)))
                 {
                     throw Unsupported(
                         $"item operation {FormatItemOperation(item)}; metadata " +
                         "updates currently support only literal text and " +
-                        "%(Identity)");
+                        "metadata references on the updated item");
                 }
 
-                var update = new UpdateItemMetadataOperation(
-                    context.GetItems(item.ItemType),
-                    item.Metadata.ToDictionary(
-                        static metadata => metadata.Name,
-                        static metadata => metadata.Value,
-                        StringComparer.OrdinalIgnoreCase),
-                    context.TargetGuard);
-                context.AddOperation(update);
-                context.SetItems(item.ItemType, update.Result);
+                Value<IReadOnlyList<bool>>? mask = null;
+
+                if (!string.IsNullOrWhiteSpace(item.Condition))
+                {
+                    if (!TryParseItemMetadataCondition(
+                        item.ItemType,
+                        item.Condition,
+                        out var metadataName,
+                        out var comparison,
+                        out var literal))
+                    {
+                        throw Unsupported(
+                            $"condition on item operation {FormatItemOperation(item)}");
+                    }
+
+                    var metadataValues = new GetItemMetadataOperation(
+                        context.GetItems(item.ItemType),
+                        metadataName,
+                        context.TargetGuard);
+                    var expected = new ConstantOperation<string>(
+                        literal,
+                        context.TargetGuard);
+                    var equal = new EqualItemValuesOperation<string>(
+                        metadataValues.Result,
+                        expected.Result,
+                        context.TargetGuard);
+                    context.AddOperation(metadataValues);
+                    context.AddOperation(expected);
+                    context.AddOperation(equal);
+                    mask = equal.Result;
+
+                    if (comparison is ItemMetadataComparison.NotEqual)
+                    {
+                        var not = new NotItemValuesOperation(
+                            mask,
+                            context.TargetGuard);
+                        context.AddOperation(not);
+                        mask = not.Result;
+                    }
+                }
+
+                TranslateItemMetadataUpdate(item, mask, context);
                 continue;
+            }
+
+            if (!string.IsNullOrWhiteSpace(item.Condition))
+            {
+                throw Unsupported(
+                    $"condition on item operation {FormatItemOperation(item)}");
             }
 
             if (string.IsNullOrWhiteSpace(item.Include) ||
@@ -1168,11 +1209,155 @@ public sealed class MSBuildProjectTranslator
         string.IsNullOrWhiteSpace(item.KeepDuplicates) &&
         item.Metadata.Count > 0;
 
-    private static bool ContainsUnsupportedMetadataReference(string value) =>
-        value.Contains("$(", StringComparison.Ordinal) ||
-        value.Contains("@(", StringComparison.Ordinal) ||
-        value.Replace("%(Identity)", string.Empty, StringComparison.OrdinalIgnoreCase)
+    private static bool TryParseItemMetadataCondition(
+        string itemType,
+        string expression,
+        out string metadataName,
+        out ItemMetadataComparison comparison,
+        out string literal)
+    {
+        var match = s_itemMetadataCondition.Match(expression);
+
+        if (!match.Success ||
+            (match.Groups["item"].Success &&
+             !match.Groups["item"].Value.Equals(
+                 itemType,
+                 StringComparison.OrdinalIgnoreCase)))
+        {
+            metadataName = string.Empty;
+            comparison = default;
+            literal = string.Empty;
+            return false;
+        }
+
+        metadataName = match.Groups["metadata"].Value;
+        comparison = match.Groups["operator"].Value == "=="
+            ? ItemMetadataComparison.Equal
+            : ItemMetadataComparison.NotEqual;
+        literal = match.Groups["literal"].Value;
+        return true;
+    }
+
+    private static void TranslateItemMetadataUpdate(
+        ProjectItemGroupTaskItemInstance item,
+        Value<IReadOnlyList<bool>>? mask,
+        TranslationContext context)
+    {
+        var items = context.GetItems(item.ItemType);
+
+        foreach (var metadata in item.Metadata)
+        {
+            var metadataValues = TranslateItemMetadataExpression(
+                items,
+                metadata.Value,
+                context);
+            var setMetadata = new SetItemMetadataOperation(
+                items,
+                metadata.Name,
+                metadataValues,
+                mask,
+                context.TargetGuard);
+            context.AddOperation(setMetadata);
+            items = setMetadata.Result;
+            context.AddItemSymbol(item.ItemType, items);
+        }
+
+        context.SetItems(item.ItemType, items);
+    }
+
+    private static Value<IReadOnlyList<string>>
+        TranslateItemMetadataExpression(
+            Value<IReadOnlyList<MSBuildItem>> items,
+            string expression,
+            TranslationContext context)
+    {
+        Value<IReadOnlyList<string>>? result = null;
+        var position = 0;
+
+        foreach (Match match in s_itemMetadataReference.Matches(expression))
+        {
+            AppendLiteral(expression[position..match.Index]);
+
+            var metadata = new GetItemMetadataOperation(
+                items,
+                match.Groups["metadata"].Value,
+                context.TargetGuard);
+            context.AddOperation(metadata);
+            Append(metadata.Result);
+            position = match.Index + match.Length;
+        }
+
+        AppendLiteral(expression[position..]);
+
+        if (result is null)
+        {
+            AppendLiteral(string.Empty, includeEmpty: true);
+        }
+
+        return result!;
+
+        void AppendLiteral(
+            string literal,
+            bool includeEmpty = false)
+        {
+            if (literal.Length == 0 && !includeEmpty)
+            {
+                return;
+            }
+
+            var constant = new ConstantOperation<string>(
+                literal,
+                context.TargetGuard);
+            var broadcast = new BroadcastItemValueOperation<string>(
+                items,
+                constant.Result,
+                context.TargetGuard);
+            context.AddOperation(constant);
+            context.AddOperation(broadcast);
+            Append(broadcast.Result);
+        }
+
+        void Append(Value<IReadOnlyList<string>> value)
+        {
+            if (result is null)
+            {
+                result = value;
+                return;
+            }
+
+            var concat = new ConcatItemValuesOperation(
+                result,
+                value,
+                context.TargetGuard);
+            context.AddOperation(concat);
+            result = concat.Result;
+        }
+    }
+
+    private static bool IsSupportedMetadataExpression(
+        string itemType,
+        string expression)
+    {
+        if (expression.Contains("$(", StringComparison.Ordinal) ||
+            expression.Contains("@(", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        foreach (Match match in s_itemMetadataReference.Matches(expression))
+        {
+            if (match.Groups["item"].Success &&
+                !match.Groups["item"].Value.Equals(
+                    itemType,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+
+        return !s_itemMetadataReference.Replace(expression, string.Empty)
             .Contains("%(", StringComparison.Ordinal);
+    }
 
     private static string FormatItemOperation(
         ProjectItemGroupTaskItemInstance item)

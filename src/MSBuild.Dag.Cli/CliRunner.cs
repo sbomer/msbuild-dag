@@ -167,6 +167,26 @@ internal static class CliRunner
                             StringComparison.Ordinal)}'"));
         }
 
+        if (operation is GetItemMetadataOperation getMetadata)
+        {
+            return $"%({getMetadata.MetadataName})";
+        }
+
+        if (operation is SetItemMetadataOperation setMetadata)
+        {
+            return $"set %({setMetadata.MetadataName})";
+        }
+
+        if (operation is ConcatItemValuesOperation)
+        {
+            return "concat each";
+        }
+
+        if (operation is NotItemValuesOperation)
+        {
+            return "not each";
+        }
+
         if (!operation.GetType().IsGenericType)
         {
             return null;
@@ -177,6 +197,16 @@ internal static class CliRunner
         if (operationType == typeof(EqualOperation<>))
         {
             return "==";
+        }
+
+        if (operationType == typeof(BroadcastItemValueOperation<>))
+        {
+            return "broadcast";
+        }
+
+        if (operationType == typeof(EqualItemValuesOperation<>))
+        {
+            return "== each";
         }
 
         if (operationType == typeof(ContainsOperation<>))

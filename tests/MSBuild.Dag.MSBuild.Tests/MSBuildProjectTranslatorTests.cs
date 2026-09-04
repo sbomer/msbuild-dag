@@ -427,6 +427,16 @@ public sealed class MSBuildProjectTranslatorTests
             CreateEvaluator().EvaluateAsync)
             .ExecuteAsync(build);
 
+        Assert.Equal(2, build.Inputs.Count);
+        Assert.Equal(2, build.Body.Inputs.Count);
+        Assert.Equal(
+            ["$(X)", "$(Y)"],
+            build.Body.Inputs
+                .Select(value => Assert.Single(result.ValueSymbols[value]).Name)
+                .ToArray());
+        Assert.Same(build.Body.Inputs[0], conditional.Inputs[1]);
+        Assert.Same(build.Body.Inputs[1], conditional.Inputs[2]);
+
         Assert.Equal(2, conditional.Outputs.Count);
         Assert.Equal(2, assignedValues.Length);
         Assert.All(
@@ -467,6 +477,17 @@ public sealed class MSBuildProjectTranslatorTests
                 Content: "A" or "B",
             });
         Assert.Empty(conditional.WhenFalse.Operations);
+        Assert.Equal(2, build.Body.Outputs.Count);
+        Assert.Equal(2, build.Outputs.Count);
+        Assert.Equal(conditional.Outputs, build.Body.Outputs);
+        Assert.Same(
+            GetExternalOutput(build, conditional.Outputs[0]),
+            result.Properties["X"]);
+        Assert.Same(
+            GetExternalOutput(build, conditional.Outputs[1]),
+            result.Properties["Y"]);
+        Assert.NotSame(conditional.Outputs[0], result.Properties["X"]);
+        Assert.NotSame(conditional.Outputs[1], result.Properties["Y"]);
         Assert.Equal(expectedX, values.Get(result.Properties["X"]));
         Assert.Equal(expectedY, values.Get(result.Properties["Y"]));
     }
@@ -709,8 +730,16 @@ public sealed class MSBuildProjectTranslatorTests
     {
         var result = TranslateAsset("ItemMetadataUpdate.proj", "Build");
         var build = result.Targets["Build"];
-        var update = Assert.Single(
-            build.Body.Operations.OfType<UpdateItemMetadataOperation>());
+        var identity = Assert.Single(
+            build.Body.Operations
+                .OfType<GetItemMetadataOperation>());
+        var broadcast = Assert.Single(
+            build.Body.Operations
+                .OfType<BroadcastItemValueOperation<string>>());
+        var concat = Assert.Single(
+            build.Body.Operations.OfType<ConcatItemValuesOperation>());
+        var setMetadata = Assert.Single(
+            build.Body.Operations.OfType<SetItemMetadataOperation>());
         var values = new ValueStore();
 
         await new BuildProgramExecutor(
@@ -719,7 +748,12 @@ public sealed class MSBuildProjectTranslatorTests
             CreateEvaluator().EvaluateAsync)
             .ExecuteAsync(build);
 
-        Assert.Equal("- %(Identity)", update.Metadata["Text"]);
+        Assert.Equal("Identity", identity.MetadataName);
+        Assert.Same(broadcast.Result, concat.Left);
+        Assert.Same(identity.Result, concat.Right);
+        Assert.Equal("Text", setMetadata.MetadataName);
+        Assert.Null(setMetadata.Mask);
+        Assert.Same(concat.Result, setMetadata.MetadataValues);
 
         var items = values.Get(result.Items["SubsetName"]);
         Assert.Equal(["clr", "libs"], GetIdentities(items));
@@ -727,6 +761,48 @@ public sealed class MSBuildProjectTranslatorTests
         Assert.Equal("- clr", items[0].Metadata["Text"]);
         Assert.Equal("library", items[1].Metadata["Kind"]);
         Assert.Equal("- libs", items[1].Metadata["Text"]);
+    }
+
+    [Fact]
+    public async Task ConditionallyUpdatesMetadataUsingCurrentMetadata()
+    {
+        var result = TranslateAsset(
+            "ConditionalItemMetadataUpdate.proj",
+            "Build");
+        var build = result.Targets["Build"];
+        var metadata = build.Body.Operations
+            .OfType<GetItemMetadataOperation>()
+            .ToArray();
+        var comparison = Assert.Single(
+            build.Body.Operations
+                .OfType<EqualItemValuesOperation<string>>());
+        var concat = Assert.Single(
+            build.Body.Operations.OfType<ConcatItemValuesOperation>());
+        var setMetadata = Assert.Single(
+            build.Body.Operations.OfType<SetItemMetadataOperation>());
+        var values = new ValueStore();
+
+        await new BuildProgramExecutor(
+            result.Program,
+            values,
+            CreateEvaluator().EvaluateAsync)
+            .ExecuteAsync(build);
+
+        Assert.Equal(
+            ["OnDemand", "Text"],
+            metadata.Select(operation => operation.MetadataName).ToArray());
+        Assert.Same(metadata[0].Result, comparison.Values);
+        Assert.Same(comparison.Result, setMetadata.Mask);
+        Assert.Same(concat.Result, setMetadata.MetadataValues);
+        Assert.Equal("Text", setMetadata.MetadataName);
+        Assert.Empty(
+            build.Body.Operations.OfType<ConditionalRegionOperation>());
+
+        var items = values.Get(result.Items["SubsetName"]);
+        Assert.Equal("- clr", items[0].Metadata["Text"]);
+        Assert.Equal(
+            "- libs [only runs on demand]",
+            items[1].Metadata["Text"]);
     }
 
     [Fact]
@@ -905,6 +981,93 @@ public sealed class MSBuildProjectTranslatorTests
                                         item.Identity,
                                         StringComparison.OrdinalIgnoreCase),
                                     StringComparer.OrdinalIgnoreCase)))
+                            .ToArray());
+                    return ValueTask.CompletedTask;
+                })
+            .Add<GetItemMetadataOperation>(
+                static (operation, values, _) =>
+                {
+                    values.Set(
+                        operation.Result,
+                        values.Get(operation.Items)
+                            .Select(item =>
+                                item.GetMetadataValue(operation.MetadataName))
+                            .ToArray());
+                    return ValueTask.CompletedTask;
+                })
+            .Add<SetItemMetadataOperation>(
+                static (operation, values, _) =>
+                {
+                    var items = values.Get(operation.Items);
+                    var metadataValues = values.Get(operation.MetadataValues);
+                    var mask = operation.Mask is null
+                        ? null
+                        : values.Get(operation.Mask);
+                    Assert.Equal(items.Count, metadataValues.Count);
+                    Assert.True(mask is null || mask.Count == items.Count);
+                    values.Set(
+                        operation.Result,
+                        items.Select(
+                                (item, index) =>
+                                    mask is null || mask[index]
+                                        ? item.WithMetadata(
+                                            new Dictionary<string, string>(
+                                                StringComparer.OrdinalIgnoreCase)
+                                            {
+                                                [operation.MetadataName] =
+                                                    metadataValues[index],
+                                            })
+                                        : item)
+                            .ToArray());
+                    return ValueTask.CompletedTask;
+                })
+            .Add<BroadcastItemValueOperation<string>>(
+                static (operation, values, _) =>
+                {
+                    values.Set(
+                        operation.Result,
+                        Enumerable.Repeat(
+                                values.Get(operation.Value),
+                                values.Get(operation.Items).Count)
+                            .ToArray());
+                    return ValueTask.CompletedTask;
+                })
+            .Add<ConcatItemValuesOperation>(
+                static (operation, values, _) =>
+                {
+                    var left = values.Get(operation.Left);
+                    var right = values.Get(operation.Right);
+                    Assert.Equal(left.Count, right.Count);
+                    values.Set(
+                        operation.Result,
+                        left.Zip(
+                                right,
+                                static (leftValue, rightValue) =>
+                                    leftValue + rightValue)
+                            .ToArray());
+                    return ValueTask.CompletedTask;
+                })
+            .Add<EqualItemValuesOperation<string>>(
+                static (operation, values, _) =>
+                {
+                    var candidate = values.Get(operation.Candidate);
+                    values.Set(
+                        operation.Result,
+                        values.Get(operation.Values)
+                            .Select(value =>
+                                StringComparer.OrdinalIgnoreCase.Equals(
+                                    value,
+                                    candidate))
+                            .ToArray());
+                    return ValueTask.CompletedTask;
+                })
+            .Add<NotItemValuesOperation>(
+                static (operation, values, _) =>
+                {
+                    values.Set(
+                        operation.Result,
+                        values.Get(operation.Values)
+                            .Select(static value => !value)
                             .ToArray());
                     return ValueTask.CompletedTask;
                 })
