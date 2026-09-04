@@ -165,6 +165,15 @@ internal static class TranslatedOperationEvaluator
                             values.Get(operation.Values)));
                     return ValueTask.CompletedTask;
                 })
+            .Add<ConcatStringsOperation>(
+                static (operation, values, _) =>
+                {
+                    values.Set(
+                        operation.Result,
+                        values.Get(operation.Left) +
+                        values.Get(operation.Right));
+                    return ValueTask.CompletedTask;
+                })
             .Add<ProjectItemIdentitiesOperation>(
                 static (operation, values, _) =>
                 {

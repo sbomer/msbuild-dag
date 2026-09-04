@@ -197,6 +197,11 @@ internal static class CliRunner
             return "join";
         }
 
+        if (operation is ConcatStringsOperation)
+        {
+            return "concat";
+        }
+
         if (!operation.GetType().IsGenericType)
         {
             return null;

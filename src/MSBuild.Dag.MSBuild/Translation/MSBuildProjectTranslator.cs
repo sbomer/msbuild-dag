@@ -33,6 +33,9 @@ public sealed class MSBuildProjectTranslator
     private static readonly Regex s_propertyReference = new(
         @"\$\((?<property>[^()]+)\)",
         RegexOptions.CultureInvariant);
+    private static readonly Regex s_itemReference = new(
+        @"@\((?<item>[A-Za-z_][A-Za-z0-9_.-]*)\)",
+        RegexOptions.CultureInvariant);
     private static readonly Regex s_unescapeItemsExpression = new(
         @"^\$\(\[MSBuild\]::Unescape\(\$\((?<property>[^.()]+)(?<replacements>(?:\.Replace\('[^']*',\s*'[^']*'\))+)\)\)\)$",
         RegexOptions.CultureInvariant);
@@ -606,9 +609,14 @@ public sealed class MSBuildProjectTranslator
 
         void AddPropertyExpressionRead(string expression)
         {
-            if (TryGetReference(expression, "$(", out var propertyName))
+            foreach (Match match in s_propertyReference.Matches(expression))
             {
-                AddPropertyRead(propertyName);
+                AddPropertyRead(match.Groups["property"].Value);
+            }
+
+            foreach (Match match in s_itemReference.Matches(expression))
+            {
+                AddItemRead(match.Groups["item"].Value);
             }
         }
 
@@ -1796,6 +1804,65 @@ public sealed class MSBuildProjectTranslator
             if (TryGetReference(expression, "$(", out var propertyName))
             {
                 return GetProperty(propertyName);
+            }
+
+            var itemReferences = s_itemReference.Matches(expression);
+
+            if (itemReferences.Count > 0 &&
+                !s_propertyReference.IsMatch(expression) &&
+                !s_itemMetadataReference.IsMatch(expression))
+            {
+                Value<string>? result = null;
+                var position = 0;
+
+                foreach (Match itemReference in itemReferences)
+                {
+                    AppendLiteral(
+                        expression[position..itemReference.Index]);
+
+                    var identities = new ProjectItemIdentitiesOperation(
+                        GetItems(itemReference.Groups["item"].Value),
+                        TargetGuard);
+                    var separator = new ConstantOperation<string>(
+                        ";",
+                        TargetGuard);
+                    var join = new JoinItemValuesOperation(
+                        identities.Result,
+                        separator.Result,
+                        TargetGuard);
+                    AddOperation(identities);
+                    AddOperation(separator);
+                    AddOperation(join);
+                    Append(join.Result);
+                    position = itemReference.Index + itemReference.Length;
+                }
+
+                AppendLiteral(expression[position..]);
+                return result!;
+
+                void AppendLiteral(string literal)
+                {
+                    if (literal.Length > 0)
+                    {
+                        Append(AddConstant(literal));
+                    }
+                }
+
+                void Append(Value<string> value)
+                {
+                    if (result is null)
+                    {
+                        result = value;
+                        return;
+                    }
+
+                    var concat = new ConcatStringsOperation(
+                        result,
+                        value,
+                        TargetGuard);
+                    AddOperation(concat);
+                    result = concat.Result;
+                }
             }
 
             if (ContainsReference(expression))

@@ -1,0 +1,12 @@
+<Project>
+  <ItemGroup>
+    <Action Include="Restore" />
+    <Action Include="Build" />
+  </ItemGroup>
+
+  <Target Name="Build">
+    <PropertyGroup>
+      <RemoveProps>Projects;@(_Missing);@(Action);Publish</RemoveProps>
+    </PropertyGroup>
+  </Target>
+</Project>

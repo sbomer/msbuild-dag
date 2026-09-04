@@ -853,6 +853,32 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Fact]
+    public async Task InterpolatesItemIdentitiesIntoPropertyValues()
+    {
+        var result = TranslateAsset("PropertyItemInterpolation.proj", "Build");
+        var build = result.Targets["Build"];
+        var joins = build.Body.Operations
+            .OfType<JoinItemValuesOperation>()
+            .ToArray();
+        var concats = build.Body.Operations
+            .OfType<ConcatStringsOperation>()
+            .ToArray();
+        var values = new ValueStore();
+
+        await new BuildProgramExecutor(
+            result.Program,
+            values,
+            CreateEvaluator().EvaluateAsync)
+            .ExecuteAsync(build);
+
+        Assert.Equal(2, joins.Length);
+        Assert.Equal(4, concats.Length);
+        Assert.Equal(
+            "Projects;;Restore;Build;Publish",
+            values.Get(result.Properties["RemoveProps"]));
+    }
+
+    [Fact]
     public async Task TranslatesAndExecutesMessageTasksInOrder()
     {
         var result = TranslateAsset("Message.proj", "Build");
@@ -1145,6 +1171,15 @@ public sealed class MSBuildProjectTranslatorTests
                         string.Join(
                             values.Get(operation.Separator),
                             values.Get(operation.Values)));
+                    return ValueTask.CompletedTask;
+                })
+            .Add<ConcatStringsOperation>(
+                static (operation, values, _) =>
+                {
+                    values.Set(
+                        operation.Result,
+                        values.Get(operation.Left) +
+                        values.Get(operation.Right));
                     return ValueTask.CompletedTask;
                 })
             .Add<ProjectItemIdentitiesOperation>(
