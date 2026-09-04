@@ -544,11 +544,22 @@ public sealed class MSBuildProjectTranslator
                     break;
 
                 case ProjectItemGroupTaskInstance itemGroup:
+                    if (!string.IsNullOrWhiteSpace(itemGroup.Condition))
+                    {
+                        AddConditionRead(itemGroup.Condition);
+                    }
+
                     foreach (var item in itemGroup.Items)
                     {
                         AddItemRead(item.ItemType);
                         AddItemExpressionRead(item.Include);
                         AddItemExpressionRead(item.Exclude);
+
+                        if (!string.IsNullOrWhiteSpace(item.Condition))
+                        {
+                            AddConditionRead(item.Condition);
+                        }
+
                         writeItems.Add(item.ItemType);
                     }
 
@@ -1122,12 +1133,6 @@ public sealed class MSBuildProjectTranslator
                 continue;
             }
 
-            if (!string.IsNullOrWhiteSpace(item.Condition))
-            {
-                throw Unsupported(
-                    $"condition on item operation {FormatItemOperation(item)}");
-            }
-
             if (string.IsNullOrWhiteSpace(item.Include) ||
                 !string.IsNullOrWhiteSpace(item.Remove) ||
                 item.Metadata.Count > 0 ||
@@ -1165,7 +1170,26 @@ public sealed class MSBuildProjectTranslator
                 context.TargetGuard);
 
             context.AddOperation(concat);
-            context.SetItems(item.ItemType, concat.Result);
+
+            if (string.IsNullOrWhiteSpace(item.Condition))
+            {
+                context.SetItems(item.ItemType, concat.Result);
+                continue;
+            }
+
+            if (!s_comparisonCondition.IsMatch(item.Condition))
+            {
+                throw Unsupported(
+                    $"condition on item operation {FormatItemOperation(item)}");
+            }
+
+            var condition = context.TranslateCondition(item.Condition);
+            var select = new SelectOperation<IReadOnlyList<MSBuildItem>>(
+                condition,
+                concat.Result,
+                existingItems);
+            context.AddOperation(select);
+            context.SetItems(item.ItemType, select.Result);
         }
     }
 

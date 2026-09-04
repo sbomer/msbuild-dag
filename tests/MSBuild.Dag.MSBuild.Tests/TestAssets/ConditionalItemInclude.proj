@@ -1,0 +1,19 @@
+<Project>
+  <PropertyGroup>
+    <IncludeA>true</IncludeA>
+    <IncludeB>false</IncludeB>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <I Include="existing" />
+  </ItemGroup>
+
+  <Target Name="Build">
+    <ItemGroup>
+      <I Include="a"
+         Condition="'$(IncludeA)' == 'true'" />
+      <I Include="b"
+         Condition="'$(IncludeB)' == 'true'" />
+    </ItemGroup>
+  </Target>
+</Project>
