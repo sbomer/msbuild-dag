@@ -2,6 +2,9 @@
   <PropertyGroup>
     <IncludeA>true</IncludeA>
     <IncludeB>false</IncludeB>
+    <Build>true</Build>
+    <Rebuild>false</Rebuild>
+    <Phrase>foo and bar</Phrase>
   </PropertyGroup>
 
   <ItemGroup>
@@ -14,6 +17,12 @@
          Condition="'$(IncludeA)' == 'true'" />
       <I Include="b"
          Condition="'$(IncludeB)' == 'true'" />
+      <I Include="build"
+         Condition="'$(Build)' == 'true' and '$(Rebuild)' != 'true'" />
+      <I Include="rebuild"
+         Condition="'$(Build)' == 'true' and '$(Rebuild)' == 'true'" />
+      <I Include="phrase"
+         Condition="'$(Phrase)' == 'foo and bar'" />
     </ItemGroup>
   </Target>
 </Project>

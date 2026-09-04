@@ -834,6 +834,9 @@ public sealed class MSBuildProjectTranslatorTests
         var selects = build.Body.Operations
             .OfType<SelectOperation<IReadOnlyList<MSBuildItem>>>()
             .ToArray();
+        var conjunctions = build.Body.Operations
+            .OfType<AndOperation>()
+            .ToArray();
         var values = new ValueStore();
 
         await new BuildProgramExecutor(
@@ -842,9 +845,10 @@ public sealed class MSBuildProjectTranslatorTests
             CreateEvaluator().EvaluateAsync)
             .ExecuteAsync(build);
 
-        Assert.Equal(2, selects.Length);
+        Assert.Equal(5, selects.Length);
+        Assert.Equal(2, conjunctions.Length);
         Assert.Equal(
-            ["existing", "a"],
+            ["existing", "a", "build", "phrase"],
             GetIdentities(values.Get(result.Items["I"])));
     }
 
@@ -966,6 +970,25 @@ public sealed class MSBuildProjectTranslatorTests
                     values.Set(
                         operation.Result,
                         !values.Get(operation.Operand));
+                    return ValueTask.CompletedTask;
+                })
+            .Add<NotEqualOperation<string>>(
+                static (operation, values, _) =>
+                {
+                    values.Set(
+                        operation.Result,
+                        !StringComparer.OrdinalIgnoreCase.Equals(
+                            values.Get(operation.Left),
+                            values.Get(operation.Right)));
+                    return ValueTask.CompletedTask;
+                })
+            .Add<AndOperation>(
+                static (operation, values, _) =>
+                {
+                    values.Set(
+                        operation.Result,
+                        values.Get(operation.Left) &&
+                        values.Get(operation.Right));
                     return ValueTask.CompletedTask;
                 })
             .Add<EqualOperation<string>>(

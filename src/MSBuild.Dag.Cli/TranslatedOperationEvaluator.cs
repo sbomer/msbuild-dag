@@ -266,6 +266,15 @@ internal static class TranslatedOperationEvaluator
                         !values.Get(operation.Operand));
                     return ValueTask.CompletedTask;
                 })
+            .Add<AndOperation>(
+                static (operation, values, _) =>
+                {
+                    values.Set(
+                        operation.Result,
+                        values.Get(operation.Left) &&
+                        values.Get(operation.Right));
+                    return ValueTask.CompletedTask;
+                })
             .Add<ConditionGuardOperation>(
                 static (operation, values, _) =>
                 {

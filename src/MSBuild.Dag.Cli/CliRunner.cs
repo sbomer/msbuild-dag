@@ -150,6 +150,11 @@ internal static class CliRunner
             return "if";
         }
 
+        if (operation is AndOperation)
+        {
+            return "and";
+        }
+
         if (operation is ProjectItemIdentitiesOperation)
         {
             return "identities";

@@ -12,6 +12,9 @@ public sealed class MSBuildProjectTranslator
     private static readonly Regex s_comparisonCondition = new(
         @"^\s*'\$\((?<property>[^)]+)\)'\s*(?<operator>==|!=)\s*'(?<literal>[^']*)'\s*$",
         RegexOptions.CultureInvariant);
+    private static readonly Regex s_andCondition = new(
+        @"^\s*(?<left>.+?)\s+and\s+(?<right>.+?)\s*$",
+        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
     private static readonly Regex s_itemIdentityCondition = new(
         @"^\s*'%\((?<item>[^.()]+)\.Identity\)'\s*==\s*'(?<literal>[^']*)'\s*$",
         RegexOptions.CultureInvariant);
@@ -632,6 +635,15 @@ public sealed class MSBuildProjectTranslator
                 return;
             }
 
+            var conjunction = s_andCondition.Match(expression);
+
+            if (conjunction.Success)
+            {
+                AddConditionRead(conjunction.Groups["left"].Value);
+                AddConditionRead(conjunction.Groups["right"].Value);
+                return;
+            }
+
             match = s_itemIdentityCondition.Match(expression);
 
             if (match.Success)
@@ -1177,7 +1189,7 @@ public sealed class MSBuildProjectTranslator
                 continue;
             }
 
-            if (!s_comparisonCondition.IsMatch(item.Condition))
+            if (!IsScalarPropertyCondition(item.Condition))
             {
                 throw Unsupported(
                     $"condition on item operation {FormatItemOperation(item)}");
@@ -1204,6 +1216,19 @@ public sealed class MSBuildProjectTranslator
         string.IsNullOrWhiteSpace(item.RemoveMetadata) &&
         string.IsNullOrWhiteSpace(item.KeepDuplicates) &&
         item.Metadata.Count > 0;
+
+    private static bool IsScalarPropertyCondition(string expression)
+    {
+        if (s_comparisonCondition.IsMatch(expression))
+        {
+            return true;
+        }
+
+        var conjunction = s_andCondition.Match(expression);
+        return conjunction.Success &&
+            IsScalarPropertyCondition(conjunction.Groups["left"].Value) &&
+            IsScalarPropertyCondition(conjunction.Groups["right"].Value);
+    }
 
     private static bool TryParseItemMetadataCondition(
         string itemType,
@@ -1714,6 +1739,19 @@ public sealed class MSBuildProjectTranslator
                     _ => throw new InvalidOperationException(
                         "The condition parser produced an unknown comparison operation."),
                 };
+            }
+
+            var conjunction = s_andCondition.Match(expression);
+
+            if (conjunction.Success)
+            {
+                var left = TranslateCondition(
+                    conjunction.Groups["left"].Value);
+                var right = TranslateCondition(
+                    conjunction.Groups["right"].Value);
+                var and = new AndOperation(left, right);
+                AddOperation(and);
+                return and.Result;
             }
 
             match = s_itemIdentityCondition.Match(expression);
