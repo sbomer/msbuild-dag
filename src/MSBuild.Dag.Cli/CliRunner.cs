@@ -207,6 +207,16 @@ internal static class CliRunner
             return "concat";
         }
 
+        if (operation is ValueOrDefaultOperation)
+        {
+            return "value or default";
+        }
+
+        if (operation is UnsupportedPropertyFunctionOperation unsupported)
+        {
+            return $"unsupported {unsupported.FunctionName}";
+        }
+
         if (!operation.GetType().IsGenericType)
         {
             return null;

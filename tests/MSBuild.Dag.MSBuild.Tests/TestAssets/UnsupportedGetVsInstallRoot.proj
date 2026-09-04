@@ -1,0 +1,7 @@
+<Project>
+  <Target Name="Build">
+    <PropertyGroup>
+      <Path>$([MSBuild]::GetVsInstallRoot())</Path>
+    </PropertyGroup>
+  </Target>
+</Project>

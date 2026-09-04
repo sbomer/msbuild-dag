@@ -1,0 +1,13 @@
+<Project>
+  <ItemGroup>
+    <I Include="existing" />
+  </ItemGroup>
+
+  <Target Name="Build">
+    <ItemGroup>
+      <I
+        Include="$([MSBuild]::GetVsInstallRoot())"
+        Condition="'$(MSBuildRuntimeType)' != 'Core'" />
+    </ItemGroup>
+  </Target>
+</Project>

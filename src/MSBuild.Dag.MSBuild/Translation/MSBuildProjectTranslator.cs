@@ -9,6 +9,17 @@ namespace MSBuild.Dag.MSBuild;
 
 public sealed class MSBuildProjectTranslator
 {
+    private sealed record PropertyReference(
+        int Index,
+        int Length,
+        string Content);
+
+    private sealed record ExpressionReference(
+        int Index,
+        int Length,
+        string? PropertyContent,
+        string? ItemName);
+
     private static readonly Regex s_comparisonCondition = new(
         @"^\s*'\$\((?<property>[^)]+)\)'\s*(?<operator>==|!=)\s*'(?<literal>[^']*)'\s*$",
         RegexOptions.CultureInvariant);
@@ -57,6 +68,7 @@ public sealed class MSBuildProjectTranslator
         using var projectCollection = new ProjectCollection();
         var project = projectCollection.LoadProject(Path.GetFullPath(projectPath));
         var projectInstance = project.CreateProjectInstance();
+        var warnings = new List<string>();
 
         if (!projectInstance.Targets.ContainsKey(targetName))
         {
@@ -70,7 +82,7 @@ public sealed class MSBuildProjectTranslator
             projectInstance,
             sourceTargets,
             GetTargetPropertyAssignments(sourceTargets),
-            reportWarning);
+            ReportWarning);
         var stateAccesses = new Dictionary<MSBuildTarget, TargetStateAccess>(
             ReferenceEqualityComparer.Instance);
         var propertyLocations =
@@ -158,7 +170,8 @@ public sealed class MSBuildProjectTranslator
                     pair => pair.Key,
                     pair => pair.Value.Value,
                     StringComparer.OrdinalIgnoreCase),
-                valueSymbols);
+                valueSymbols,
+                ReportWarning);
 
             foreach (var (name, read) in propertyReads)
             {
@@ -389,7 +402,13 @@ public sealed class MSBuildProjectTranslator
             items,
             valueSymbols.Build(),
             targetConditions,
-            links.Warnings);
+            warnings);
+
+        void ReportWarning(string warning)
+        {
+            warnings.Add(warning);
+            reportWarning?.Invoke(warning);
+        }
 
         string GetTargetName(TargetDefinition definition)
         {
@@ -1186,32 +1205,11 @@ public sealed class MSBuildProjectTranslator
                     "currently supported");
             }
 
-            var existingItems = context.GetItems(item.ItemType);
-            var appendedItems = context.ResolveItemsExpression(item.Include);
-            context.AddItemSymbol(item.ItemType, appendedItems);
-
-            if (!string.IsNullOrWhiteSpace(item.Exclude))
-            {
-                var excludedItems =
-                    context.ResolveItemsExpression(item.Exclude);
-                var exclude = new ExcludeItemsOperation(
-                    appendedItems,
-                    excludedItems,
-                    context.TargetGuard);
-                context.AddOperation(exclude);
-                appendedItems = exclude.Result;
-            }
-
-            var concat = new ConcatItemsOperation(
-                existingItems,
-                appendedItems,
-                context.TargetGuard);
-
-            context.AddOperation(concat);
-
             if (string.IsNullOrWhiteSpace(item.Condition))
             {
-                context.SetItems(item.ItemType, concat.Result);
+                context.SetItems(
+                    item.ItemType,
+                    TranslateItemInclude(item, context));
                 continue;
             }
 
@@ -1222,13 +1220,55 @@ public sealed class MSBuildProjectTranslator
             }
 
             var condition = context.TranslateCondition(item.Condition);
-            var select = new SelectOperation<IReadOnlyList<MSBuildItem>>(
+            var whenTrue = context.CreateBranch();
+            var whenFalse = context.CreateBranch();
+            var whenTrueItems = TranslateItemInclude(
+                item,
+                whenTrue.Context);
+            var result = new Value<IReadOnlyList<MSBuildItem>>();
+            var conditional = new ConditionalRegionOperation(
                 condition,
-                concat.Result,
-                existingItems);
-            context.AddOperation(select);
-            context.SetItems(item.ItemType, select.Result);
+                whenTrue.Arguments,
+                new OperationGraph(
+                    whenTrue.Parameters,
+                    whenTrue.Context.Operations,
+                    [whenTrueItems]),
+                new OperationGraph(
+                    whenFalse.Parameters,
+                    [],
+                    [whenFalse.Context.GetItems(item.ItemType)]),
+                [result]);
+            context.AddOperation(conditional);
+            context.SetItems(item.ItemType, result);
         }
+    }
+
+    private static Value<IReadOnlyList<MSBuildItem>> TranslateItemInclude(
+        ProjectItemGroupTaskItemInstance item,
+        TranslationContext context)
+    {
+        var existingItems = context.GetItems(item.ItemType);
+        var appendedItems = context.ResolveItemsExpression(item.Include);
+        context.AddItemSymbol(item.ItemType, appendedItems);
+
+        if (!string.IsNullOrWhiteSpace(item.Exclude))
+        {
+            var excludedItems =
+                context.ResolveItemsExpression(item.Exclude);
+            var exclude = new ExcludeItemsOperation(
+                appendedItems,
+                excludedItems,
+                context.TargetGuard);
+            context.AddOperation(exclude);
+            appendedItems = exclude.Result;
+        }
+
+        var concat = new ConcatItemsOperation(
+            existingItems,
+            appendedItems,
+            context.TargetGuard);
+        context.AddOperation(concat);
+        return concat.Result;
     }
 
     private static bool IsMetadataUpdate(
@@ -1669,10 +1709,16 @@ public sealed class MSBuildProjectTranslator
 
     private sealed class TranslationContext
     {
+        public sealed record Branch(
+            TranslationContext Context,
+            IReadOnlyList<Value> Arguments,
+            IReadOnlyList<Value> Parameters);
+
         public TranslationContext(
             IReadOnlyDictionary<string, Value<string>> properties,
             IReadOnlyDictionary<string, Value<IReadOnlyList<MSBuildItem>>> items,
-            ValueSymbolTableBuilder valueSymbols)
+            ValueSymbolTableBuilder valueSymbols,
+            Action<string>? reportWarning = null)
         {
             Properties = new Dictionary<string, Value<string>>(
                 properties,
@@ -1682,6 +1728,7 @@ public sealed class MSBuildProjectTranslator
                     items,
                     StringComparer.OrdinalIgnoreCase);
             ValueSymbols = valueSymbols;
+            ReportWarning = reportWarning;
         }
 
         public Dictionary<string, Value<string>> Properties { get; }
@@ -1692,6 +1739,8 @@ public sealed class MSBuildProjectTranslator
         }
 
         private ValueSymbolTableBuilder ValueSymbols { get; }
+
+        private Action<string>? ReportWarning { get; }
 
         public Value<OrderToken>? CurrentOrderToken { get; private set; }
 
@@ -1724,6 +1773,46 @@ public sealed class MSBuildProjectTranslator
 
         public void SetTargetGuard(Value<GuardToken> guard) =>
             TargetGuard = guard;
+
+        public Branch CreateBranch()
+        {
+            var arguments = new List<Value>(
+                Properties.Count + Items.Count);
+            var parameters = new List<Value>(
+                Properties.Count + Items.Count);
+            var properties = new Dictionary<string, Value<string>>(
+                StringComparer.OrdinalIgnoreCase);
+            var items =
+                new Dictionary<string, Value<IReadOnlyList<MSBuildItem>>>(
+                    StringComparer.OrdinalIgnoreCase);
+
+            foreach (var (name, value) in Properties)
+            {
+                var parameter = new Value<string>();
+                arguments.Add(value);
+                parameters.Add(parameter);
+                properties.Add(name, parameter);
+                CopySymbols(value, parameter);
+            }
+
+            foreach (var (name, value) in Items)
+            {
+                var parameter = new Value<IReadOnlyList<MSBuildItem>>();
+                arguments.Add(value);
+                parameters.Add(parameter);
+                items.Add(name, parameter);
+                CopySymbols(value, parameter);
+            }
+
+            return new Branch(
+                new TranslationContext(
+                    properties,
+                    items,
+                    ValueSymbols,
+                    ReportWarning),
+                arguments,
+                parameters);
+        }
 
         public OperationControl CreateControl() =>
             new(
@@ -1843,17 +1932,29 @@ public sealed class MSBuildProjectTranslator
 
         public Value<string> ResolvePropertyExpression(string expression)
         {
-            if (TryGetReference(expression, "$(", out var propertyName))
+            var propertyReferences = FindPropertyReferences(expression);
+
+            if (propertyReferences.Count == 1 &&
+                propertyReferences[0].Index == 0 &&
+                propertyReferences[0].Length == expression.Length)
             {
-                return GetProperty(propertyName);
+                return ResolvePropertyReference(propertyReferences[0].Content);
             }
 
-            var references = s_propertyReference.Matches(expression)
-                .Select(match => (Match: match, IsProperty: true))
+            var references = propertyReferences
+                .Select(reference => new ExpressionReference(
+                    reference.Index,
+                    reference.Length,
+                    reference.Content,
+                    null))
                 .Concat(
                     s_itemReference.Matches(expression)
-                        .Select(match => (Match: match, IsProperty: false)))
-                .OrderBy(reference => reference.Match.Index)
+                        .Select(match => new ExpressionReference(
+                            match.Index,
+                            match.Length,
+                            null,
+                            match.Groups["item"].Value)))
+                .OrderBy(reference => reference.Index)
                 .ToArray();
 
             if (references.Length > 0)
@@ -1864,18 +1965,17 @@ public sealed class MSBuildProjectTranslator
                 foreach (var reference in references)
                 {
                     AppendLiteral(
-                        expression[position..reference.Match.Index]);
+                        expression[position..reference.Index]);
 
-                    if (reference.IsProperty)
+                    if (reference.PropertyContent is not null)
                     {
-                        Append(
-                            GetProperty(
-                                reference.Match.Groups["property"].Value));
+                        Append(ResolvePropertyReference(
+                            reference.PropertyContent));
                     }
                     else
                     {
                         var identities = new ProjectItemIdentitiesOperation(
-                            GetItems(reference.Match.Groups["item"].Value),
+                            GetItems(reference.ItemName!),
                             TargetGuard);
                         var separator = new ConstantOperation<string>(
                             ";",
@@ -1890,7 +1990,7 @@ public sealed class MSBuildProjectTranslator
                         Append(join.Result);
                     }
 
-                    position = reference.Match.Index + reference.Match.Length;
+                    position = reference.Index + reference.Length;
                 }
 
                 AppendLiteral(expression[position..]);
@@ -1933,6 +2033,45 @@ public sealed class MSBuildProjectTranslator
             }
 
             return AddConstant(expression);
+
+            Value<string> ResolvePropertyReference(string content)
+            {
+                if (!content.Contains('(') &&
+                    !content.Contains(')') &&
+                    !content.Contains("::", StringComparison.Ordinal))
+                {
+                    return GetProperty(content);
+                }
+
+                if (TryParseValueOrDefault(
+                    content,
+                    out var valueExpression,
+                    out var defaultExpression))
+                {
+                    var operation = new ValueOrDefaultOperation(
+                        ResolvePropertyExpression(valueExpression),
+                        ResolvePropertyExpression(defaultExpression),
+                        TargetGuard);
+                    AddOperation(operation);
+                    return operation.Result;
+                }
+
+                var functionEnd = content.IndexOf(
+                    '(',
+                    StringComparison.Ordinal);
+                var functionName = functionEnd < 0
+                    ? content
+                    : content[..functionEnd];
+                ReportWarning?.Invoke(
+                    $"Unsupported property function '{functionName}' will " +
+                    "fail if its value is required at runtime.");
+                var unsupported =
+                    new UnsupportedPropertyFunctionOperation(
+                        functionName,
+                        TargetGuard);
+                AddOperation(unsupported);
+                return unsupported.Result;
+            }
         }
 
         public Value<IReadOnlyList<MSBuildItem>> ResolveItemsExpression(
@@ -1956,7 +2095,7 @@ public sealed class MSBuildProjectTranslator
                 return operation.Result;
             }
 
-            if (s_propertyReference.IsMatch(expression) &&
+            if (FindPropertyReferences(expression).Count > 0 &&
                 !s_itemReference.IsMatch(expression) &&
                 !s_itemMetadataReference.IsMatch(expression))
             {
@@ -2014,6 +2153,146 @@ public sealed class MSBuildProjectTranslator
             AddOperation(operation);
             return operation.Result;
         }
+    }
+
+    private static IReadOnlyList<PropertyReference> FindPropertyReferences(
+        string expression)
+    {
+        var result = new List<PropertyReference>();
+
+        for (var index = 0; index < expression.Length - 1; index++)
+        {
+            if (expression[index] != '$' || expression[index + 1] != '(')
+            {
+                continue;
+            }
+
+            var depth = 1;
+            var inQuote = false;
+            var end = index + 2;
+
+            for (; end < expression.Length; end++)
+            {
+                var character = expression[end];
+
+                if (character == '\'')
+                {
+                    if (inQuote &&
+                        end + 1 < expression.Length &&
+                        expression[end + 1] == '\'')
+                    {
+                        end++;
+                        continue;
+                    }
+
+                    inQuote = !inQuote;
+                    continue;
+                }
+
+                if (inQuote)
+                {
+                    continue;
+                }
+
+                if (character == '(')
+                {
+                    depth++;
+                }
+                else if (character == ')' && --depth == 0)
+                {
+                    break;
+                }
+            }
+
+            if (depth != 0)
+            {
+                continue;
+            }
+
+            result.Add(
+                new PropertyReference(
+                    index,
+                    end - index + 1,
+                    expression[(index + 2)..end]));
+            index = end;
+        }
+
+        return result;
+    }
+
+    private static bool TryParseValueOrDefault(
+        string content,
+        out string value,
+        out string defaultValue)
+    {
+        const string prefix = "[MSBuild]::ValueOrDefault(";
+
+        if (!content.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ||
+            !content.EndsWith(')'))
+        {
+            value = string.Empty;
+            defaultValue = string.Empty;
+            return false;
+        }
+
+        var arguments = content[prefix.Length..^1];
+        var separator = FindArgumentSeparator(arguments);
+
+        if (separator < 0)
+        {
+            value = string.Empty;
+            defaultValue = string.Empty;
+            return false;
+        }
+
+        value = Unquote(arguments[..separator].Trim());
+        defaultValue = Unquote(arguments[(separator + 1)..].Trim());
+        return true;
+
+        static int FindArgumentSeparator(string arguments)
+        {
+            var depth = 0;
+            var inQuote = false;
+
+            for (var index = 0; index < arguments.Length; index++)
+            {
+                var character = arguments[index];
+
+                if (character == '\'')
+                {
+                    if (inQuote &&
+                        index + 1 < arguments.Length &&
+                        arguments[index + 1] == '\'')
+                    {
+                        index++;
+                        continue;
+                    }
+
+                    inQuote = !inQuote;
+                }
+                else if (!inQuote && character == '(')
+                {
+                    depth++;
+                }
+                else if (!inQuote && character == ')')
+                {
+                    depth--;
+                }
+                else if (!inQuote && depth == 0 && character == ',')
+                {
+                    return index;
+                }
+            }
+
+            return -1;
+        }
+
+        static string Unquote(string argument) =>
+            argument.Length >= 2 &&
+            argument[0] == '\'' &&
+            argument[^1] == '\''
+                ? argument[1..^1].Replace("''", "'", StringComparison.Ordinal)
+                : argument;
     }
 
     private static bool ContainsReference(string expression) =>

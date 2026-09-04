@@ -174,6 +174,23 @@ internal static class TranslatedOperationEvaluator
                         values.Get(operation.Right));
                     return ValueTask.CompletedTask;
                 })
+            .Add<ValueOrDefaultOperation>(
+                static (operation, values, _) =>
+                {
+                    var value = values.Get(operation.Value);
+                    values.Set(
+                        operation.Result,
+                        value.Length == 0
+                            ? values.Get(operation.DefaultValue)
+                            : value);
+                    return ValueTask.CompletedTask;
+                })
+            .Add<UnsupportedPropertyFunctionOperation>(
+                static (operation, _, _) =>
+                    ValueTask.FromException(
+                        new InvalidOperationException(
+                            $"Unsupported property function " +
+                            $"'{operation.FunctionName}' was evaluated.")))
             .Add<ProjectItemIdentitiesOperation>(
                 static (operation, values, _) =>
                 {

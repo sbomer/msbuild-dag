@@ -831,8 +831,8 @@ public sealed class MSBuildProjectTranslatorTests
     {
         var result = TranslateAsset("ConditionalItemInclude.proj", "Build");
         var build = result.Targets["Build"];
-        var selects = build.Body.Operations
-            .OfType<SelectOperation<IReadOnlyList<MSBuildItem>>>()
+        var conditionals = build.Body.Operations
+            .OfType<ConditionalRegionOperation>()
             .ToArray();
         var conjunctions = build.Body.Operations
             .OfType<AndOperation>()
@@ -848,7 +848,7 @@ public sealed class MSBuildProjectTranslatorTests
             CreateEvaluator().EvaluateAsync)
             .ExecuteAsync(build);
 
-        Assert.Equal(9, selects.Length);
+        Assert.Equal(9, conditionals.Length);
         Assert.Equal(3, conjunctions.Length);
         Assert.Equal(3, disjunctions.Length);
         Assert.Equal(
@@ -915,6 +915,88 @@ public sealed class MSBuildProjectTranslatorTests
         Assert.Equal(
             ["prefix", "one", "two", "suffix"],
             GetIdentities(values.Get(result.Items["Expanded"])));
+    }
+
+    [Fact]
+    public async Task EvaluatesValueOrDefaultPropertyFunctions()
+    {
+        var result = TranslateAsset("ValueOrDefault.proj", "Build");
+        var build = result.Targets["Build"];
+        var operations = build.Body.Operations
+            .OfType<ValueOrDefaultOperation>()
+            .ToArray();
+        var values = new ValueStore();
+
+        await new BuildProgramExecutor(
+            result.Program,
+            values,
+            CreateEvaluator().EvaluateAsync)
+            .ExecuteAsync(build);
+
+        Assert.Equal(2, operations.Length);
+        Assert.Equal(
+            "prefix-fallback-suffix",
+            values.Get(result.Properties["Fallback"]));
+        Assert.Equal(
+            "selected",
+            values.Get(result.Properties["Existing"]));
+    }
+
+    [Fact]
+    public async Task WarnsAndFailsWhenUnsupportedPropertyFunctionExecutes()
+    {
+        var warnings = new List<string>();
+        var projectPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "TestAssets",
+            "UnsupportedGetVsInstallRoot.proj");
+        var result = new MSBuildProjectTranslator().Translate(
+            projectPath,
+            "Build",
+            warnings.Add);
+        var operation = Assert.Single(
+            result.Targets["Build"].Body.Operations
+                .OfType<UnsupportedPropertyFunctionOperation>());
+
+        Assert.Single(warnings);
+        Assert.Equal(warnings, result.Warnings);
+        Assert.Contains(operation.FunctionName, warnings[0]);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await new BuildProgramExecutor(
+                result.Program,
+                new ValueStore(),
+                CreateEvaluator().EvaluateAsync)
+                .ExecuteAsync(result.Targets["Build"]));
+
+        Assert.Contains(operation.FunctionName, exception.Message);
+    }
+
+    [Fact]
+    public async Task DoesNotEvaluateUnsupportedFunctionInFalseItemBranch()
+    {
+        var warnings = new List<string>();
+        var projectPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "TestAssets",
+            "GuardedUnsupportedPropertyFunction.proj");
+        var result = new MSBuildProjectTranslator().Translate(
+            projectPath,
+            "Build",
+            warnings.Add);
+        var values = new ValueStore();
+
+        await new BuildProgramExecutor(
+            result.Program,
+            values,
+            CreateEvaluator().EvaluateAsync)
+            .ExecuteAsync(result.Targets["Build"]);
+
+        Assert.Single(warnings);
+        Assert.Equal(warnings, result.Warnings);
+        Assert.Equal(
+            ["existing"],
+            GetIdentities(values.Get(result.Items["I"])));
     }
 
     [Fact]
@@ -1230,6 +1312,23 @@ public sealed class MSBuildProjectTranslatorTests
                         values.Get(operation.Right));
                     return ValueTask.CompletedTask;
                 })
+            .Add<ValueOrDefaultOperation>(
+                static (operation, values, _) =>
+                {
+                    var value = values.Get(operation.Value);
+                    values.Set(
+                        operation.Result,
+                        value.Length == 0
+                            ? values.Get(operation.DefaultValue)
+                            : value);
+                    return ValueTask.CompletedTask;
+                })
+            .Add<UnsupportedPropertyFunctionOperation>(
+                static (operation, _, _) =>
+                    ValueTask.FromException(
+                        new InvalidOperationException(
+                            $"Unsupported property function " +
+                            $"'{operation.FunctionName}' was evaluated.")))
             .Add<ProjectItemIdentitiesOperation>(
                 static (operation, values, _) =>
                 {

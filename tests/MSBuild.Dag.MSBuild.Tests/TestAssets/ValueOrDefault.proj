@@ -1,0 +1,13 @@
+<Project>
+  <PropertyGroup>
+    <Primary></Primary>
+    <Secondary>selected</Secondary>
+  </PropertyGroup>
+
+  <Target Name="Build">
+    <PropertyGroup>
+      <Fallback>prefix-$([MSBuild]::ValueOrDefault('$(Primary)', 'fallback'))-suffix</Fallback>
+      <Existing>$([MSBuild]::ValueOrDefault('$(Secondary)', 'fallback'))</Existing>
+    </PropertyGroup>
+  </Target>
+</Project>
