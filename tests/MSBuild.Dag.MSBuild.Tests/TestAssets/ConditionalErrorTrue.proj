@@ -1,0 +1,12 @@
+<Project>
+  <PropertyGroup>
+    <Fail>true</Fail>
+  </PropertyGroup>
+
+  <Target Name="Build">
+    <Error
+      Text="Expected failure."
+      Condition="'$(Fail)' == 'true'" />
+    <Message Text="unreachable" />
+  </Target>
+</Project>

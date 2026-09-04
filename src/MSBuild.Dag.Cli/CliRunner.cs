@@ -217,6 +217,11 @@ internal static class CliRunner
             return $"unsupported {unsupported.FunctionName}";
         }
 
+        if (operation is ErrorOperation)
+        {
+            return "error";
+        }
+
         if (!operation.GetType().IsGenericType)
         {
             return null;

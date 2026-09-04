@@ -594,6 +594,11 @@ public sealed class MSBuildProjectTranslator
                     break;
 
                 case ProjectTaskInstance task:
+                    if (!string.IsNullOrWhiteSpace(task.Condition))
+                    {
+                        AddConditionRead(task.Condition);
+                    }
+
                     if (task.Name.Equals(
                         "ToyCompile",
                         StringComparison.OrdinalIgnoreCase))
@@ -612,10 +617,22 @@ public sealed class MSBuildProjectTranslator
                         AddPropertyExpressionRead(
                             GetParameter(task, "Importance") ?? "normal");
                     }
+                    else if (task.Name.Equals(
+                        "Error",
+                        StringComparison.OrdinalIgnoreCase))
+                    {
+                        AddPropertyExpressionRead(
+                            GetRequiredParameter(task, "Text"));
+                    }
 
                     foreach (var output in task.Outputs
                         .OfType<ProjectTaskOutputPropertyInstance>())
                     {
+                        if (!string.IsNullOrWhiteSpace(task.Condition))
+                        {
+                            AddPropertyRead(output.PropertyName);
+                        }
+
                         writeProperties.Add(output.PropertyName);
                     }
 
@@ -1497,11 +1514,81 @@ public sealed class MSBuildProjectTranslator
         ProjectTaskInstance task,
         TranslationContext context)
     {
-        if (!string.IsNullOrWhiteSpace(task.Condition))
+        if (string.IsNullOrWhiteSpace(task.Condition))
         {
-            throw Unsupported("task conditions");
+            TranslateUnconditionalTask(task, context);
+            return;
         }
 
+        var condition = context.TranslateCondition(task.Condition);
+        var whenTrue = context.CreateBranch();
+        var whenFalse = context.CreateBranch();
+
+        TranslateUnconditionalTask(task, whenTrue.Context);
+
+        var whenTrueOutputs = new List<Value>();
+        var whenFalseOutputs = new List<Value>();
+        var outputs = new List<Value>();
+        var propertyOutputs = new List<(string Name, Value<string> Result)>();
+
+        foreach (var output in task.Outputs
+            .OfType<ProjectTaskOutputPropertyInstance>())
+        {
+            var result = new Value<string>();
+            whenTrueOutputs.Add(
+                whenTrue.Context.GetProperty(output.PropertyName));
+            whenFalseOutputs.Add(
+                whenFalse.Context.GetProperty(output.PropertyName));
+            outputs.Add(result);
+            propertyOutputs.Add((output.PropertyName, result));
+        }
+
+        var whenTrueOrder = GetBranchOrderOutput(whenTrue.Context);
+        var whenFalseOrder = GetBranchOrderOutput(whenFalse.Context);
+        var orderResult = new Value<OrderToken>();
+        whenTrueOutputs.Add(whenTrueOrder);
+        whenFalseOutputs.Add(whenFalseOrder);
+        outputs.Add(orderResult);
+
+        context.AddOperation(
+            new ConditionalRegionOperation(
+                condition,
+                whenTrue.Arguments,
+                new OperationGraph(
+                    whenTrue.Parameters,
+                    whenTrue.Context.Operations,
+                    whenTrueOutputs),
+                new OperationGraph(
+                    whenFalse.Parameters,
+                    whenFalse.Context.Operations,
+                    whenFalseOutputs),
+                outputs));
+
+        foreach (var (name, result) in propertyOutputs)
+        {
+            context.SetProperty(name, result);
+        }
+
+        context.SetCurrentOrderToken(orderResult);
+
+        static Value<OrderToken> GetBranchOrderOutput(
+            TranslationContext branch)
+        {
+            if (branch.CurrentOrderToken is not null)
+            {
+                return branch.CurrentOrderToken;
+            }
+
+            var order = new ConstantOperation<OrderToken>(new OrderToken());
+            branch.AddOperation(order);
+            return order.Result;
+        }
+    }
+
+    private static void TranslateUnconditionalTask(
+        ProjectTaskInstance task,
+        TranslationContext context)
+    {
         if (task.Name.Equals("ToyCompile", StringComparison.OrdinalIgnoreCase))
         {
             TranslateToyCompile(task, context);
@@ -1514,7 +1601,28 @@ public sealed class MSBuildProjectTranslator
             return;
         }
 
+        if (task.Name.Equals("Error", StringComparison.OrdinalIgnoreCase))
+        {
+            TranslateError(task, context);
+            return;
+        }
+
         throw Unsupported($"task '{task.Name}'");
+    }
+
+    private static void TranslateError(
+        ProjectTaskInstance task,
+        TranslationContext context)
+    {
+        if (task.Outputs.Count > 0)
+        {
+            throw Unsupported("Error outputs");
+        }
+
+        var text = context.ResolvePropertyExpression(
+            GetRequiredParameter(task, "Text"));
+        context.AddOperation(
+            new ErrorOperation(text, context.CreateControl()));
     }
 
     private static void TranslateToyCompile(
@@ -1774,6 +1882,9 @@ public sealed class MSBuildProjectTranslator
         public void SetTargetGuard(Value<GuardToken> guard) =>
             TargetGuard = guard;
 
+        public void SetCurrentOrderToken(Value<OrderToken> order) =>
+            CurrentOrderToken = order;
+
         public Branch CreateBranch()
         {
             var arguments = new List<Value>(
@@ -1804,14 +1915,29 @@ public sealed class MSBuildProjectTranslator
                 CopySymbols(value, parameter);
             }
 
-            return new Branch(
-                new TranslationContext(
-                    properties,
-                    items,
-                    ValueSymbols,
-                    ReportWarning),
-                arguments,
-                parameters);
+            var context = new TranslationContext(
+                properties,
+                items,
+                ValueSymbols,
+                ReportWarning);
+
+            if (TargetGuard is not null)
+            {
+                var parameter = new Value<GuardToken>();
+                arguments.Add(TargetGuard);
+                parameters.Add(parameter);
+                context.SetTargetGuard(parameter);
+            }
+
+            if (CurrentOrderToken is not null)
+            {
+                var parameter = new Value<OrderToken>();
+                arguments.Add(CurrentOrderToken);
+                parameters.Add(parameter);
+                context.SetCurrentOrderToken(parameter);
+            }
+
+            return new Branch(context, arguments, parameters);
         }
 
         public OperationControl CreateControl() =>

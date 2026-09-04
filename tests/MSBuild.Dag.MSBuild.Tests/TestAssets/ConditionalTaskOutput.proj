@@ -1,0 +1,20 @@
+<Project>
+  <PropertyGroup>
+    <Assembly>existing.dll</Assembly>
+    <Compile>false</Compile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+  </ItemGroup>
+
+  <Target Name="Build">
+    <ToyCompile
+      Sources="@(Compile)"
+      Configuration="Debug"
+      Condition="'$(Compile)' == 'true'">
+      <Output TaskParameter="Assembly" PropertyName="Assembly" />
+    </ToyCompile>
+    <Message Text="$(Assembly)" />
+  </Target>
+</Project>

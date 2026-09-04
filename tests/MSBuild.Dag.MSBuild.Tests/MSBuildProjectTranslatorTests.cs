@@ -150,7 +150,8 @@ public sealed class MSBuildProjectTranslatorTests
         var exception = Assert.Throws<NotSupportedException>(
             () => new MSBuildProjectTranslator().Translate(projectPath, "Build"));
 
-        Assert.Contains("task conditions", exception.Message);
+        Assert.Contains("target condition", exception.Message);
+        Assert.DoesNotContain("task conditions", exception.Message);
         Assert.DoesNotContain("orchestration", exception.Message);
     }
 
@@ -1049,6 +1050,103 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Fact]
+    public async Task FalseTaskConditionSkipsErrorAndPreservesOrder()
+    {
+        var result = TranslateAsset("ConditionalError.proj", "Build");
+        var build = result.Targets["Build"];
+        var conditional = Assert.Single(
+            build.Body.Operations.OfType<ConditionalRegionOperation>());
+        Assert.Single(
+            conditional.WhenTrue.Operations.OfType<ErrorOperation>());
+        var messages = new List<string>();
+        var values = new ValueStore();
+
+        await new BuildProgramExecutor(
+            result.Program,
+            values,
+            CreateEvaluator(
+                onMessage: (operation, store) =>
+                    messages.Add(store.Get(operation.Text))).EvaluateAsync)
+            .ExecuteAsync(build);
+
+        Assert.Equal(["continued"], messages);
+    }
+
+    [Fact]
+    public async Task TrueTaskConditionExecutesError()
+    {
+        var result = TranslateAsset("ConditionalErrorTrue.proj", "Build");
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await new BuildProgramExecutor(
+                result.Program,
+                new ValueStore(),
+                CreateEvaluator().EvaluateAsync)
+                .ExecuteAsync(result.Targets["Build"]));
+
+        Assert.Equal("Expected failure.", exception.Message);
+    }
+
+    [Fact]
+    public async Task FalseTaskConditionPreservesPriorOutputProperty()
+    {
+        var result = TranslateAsset("ConditionalTaskOutput.proj", "Build");
+        var build = result.Targets["Build"];
+        var conditional = Assert.Single(
+            build.Body.Operations.OfType<ConditionalRegionOperation>());
+        var compile = Assert.Single(
+            conditional.WhenTrue.Operations.OfType<ToyCompileOperation>());
+        var message = Assert.Single(
+            build.Body.Operations.OfType<MessageOperation>());
+        var assemblyInputIndex = Enumerable.Range(
+                1,
+                conditional.Inputs.Count - 1)
+            .Single(index =>
+                result.ValueSymbols.TryGetValue(
+                    conditional.Inputs[index],
+                    out var symbols) &&
+                symbols.Any(symbol => symbol.Name == "$(Assembly)"));
+        var assemblyOutputIndex = Enumerable.Range(
+                0,
+                conditional.Outputs.Count)
+            .Single(index =>
+                result.ValueSymbols.TryGetValue(
+                    conditional.Outputs[index],
+                    out var symbols) &&
+                symbols.Any(symbol => symbol.Name == "$(Assembly)"));
+        var assemblyInput = conditional.Inputs[assemblyInputIndex];
+        var assemblyOutput = conditional.Outputs[assemblyOutputIndex];
+
+        Assert.Null(build.Body.GetProducer(assemblyInput));
+        Assert.Same(
+            compile.Assembly,
+            conditional.WhenTrue.Outputs[assemblyOutputIndex]);
+        Assert.Same(
+            conditional.WhenFalse.Inputs[assemblyInputIndex - 1],
+            conditional.WhenFalse.Outputs[assemblyOutputIndex]);
+        Assert.Same(conditional, build.Body.GetProducer(assemblyOutput));
+        Assert.Same(assemblyOutput, message.Text);
+        Assert.Contains(conditional, build.Body.GetDependencies(message));
+
+        var compileExecuted = false;
+        var messages = new List<string>();
+        var values = new ValueStore();
+
+        await new BuildProgramExecutor(
+            result.Program,
+            values,
+            CreateEvaluator(
+                _ => compileExecuted = true,
+                (operation, store) =>
+                    messages.Add(store.Get(operation.Text))).EvaluateAsync)
+            .ExecuteAsync(build);
+
+        Assert.False(compileExecuted);
+        Assert.Equal("existing.dll", values.Get(result.Properties["Assembly"]));
+        Assert.Equal(["existing.dll"], messages);
+    }
+
+    [Fact]
     public async Task FalseTargetConditionPreventsTargetBodyExecution()
     {
         var projectPath = Path.Combine(
@@ -1088,6 +1186,12 @@ public sealed class MSBuildProjectTranslatorTests
                     return ValueTask.CompletedTask;
                 })
             .Add<ConstantOperation<IReadOnlyList<MSBuildItem>>>(
+                static (operation, values, _) =>
+                {
+                    values.Set(operation.Result, operation.Content);
+                    return ValueTask.CompletedTask;
+                })
+            .Add<ConstantOperation<OrderToken>>(
                 static (operation, values, _) =>
                 {
                     values.Set(operation.Result, operation.Content);
@@ -1373,6 +1477,11 @@ public sealed class MSBuildProjectTranslatorTests
                     onMessage?.Invoke(operation, values);
                     return ValueTask.CompletedTask;
                 })
+            .Add<ErrorOperation>(
+                static (operation, values, _) =>
+                    ValueTask.FromException(
+                        new InvalidOperationException(
+                            values.Get(operation.Text))))
             .Add<MissingTargetOperation>(
                 static (operation, _, _) =>
                     ValueTask.FromException(

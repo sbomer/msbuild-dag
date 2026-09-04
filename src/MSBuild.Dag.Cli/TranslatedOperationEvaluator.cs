@@ -26,6 +26,12 @@ internal static class TranslatedOperationEvaluator
                     values.Set(operation.Result, operation.Content);
                     return ValueTask.CompletedTask;
                 })
+            .Add<ConstantOperation<OrderToken>>(
+                static (operation, values, _) =>
+                {
+                    values.Set(operation.Result, operation.Content);
+                    return ValueTask.CompletedTask;
+                })
             .Add<ConcatItemsOperation>(
                 static (operation, values, _) =>
                 {
@@ -256,6 +262,11 @@ internal static class TranslatedOperationEvaluator
                     Console.WriteLine(values.Get(operation.Text));
                     return ValueTask.CompletedTask;
                 })
+            .Add<ErrorOperation>(
+                static (operation, values, _) =>
+                    ValueTask.FromException(
+                        new InvalidOperationException(
+                            values.Get(operation.Text))))
             .Add<MissingTargetOperation>(
                 static (operation, _, _) =>
                     ValueTask.FromException(

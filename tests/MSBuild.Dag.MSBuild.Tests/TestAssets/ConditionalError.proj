@@ -1,0 +1,8 @@
+<Project>
+  <Target Name="Build">
+    <Error
+      Text="This error should be skipped."
+      Condition="'@(RepoRootSlnFile)' != '' and '@(RepoRootSlnxFile)' != ''" />
+    <Message Text="continued" />
+  </Target>
+</Project>
