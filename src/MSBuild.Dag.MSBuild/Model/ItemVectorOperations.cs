@@ -84,3 +84,23 @@ public sealed class NotItemValuesOperation(
 
     public override IReadOnlyList<Value> Outputs => [Result];
 }
+
+public sealed class JoinItemValuesOperation(
+    Value<IReadOnlyList<string>> values,
+    Value<string> separator,
+    Value<GuardToken>? guard = null)
+    : Operation, IGuardedOperation
+{
+    public Value<IReadOnlyList<string>> Values { get; } = values;
+
+    public Value<string> Separator { get; } = separator;
+
+    public Value<GuardToken>? Guard { get; } = guard;
+
+    public Value<string> Result { get; } = new();
+
+    public override IReadOnlyList<Value> Inputs =>
+        Guard is null ? [Values, Separator] : [Guard, Values, Separator];
+
+    public override IReadOnlyList<Value> Outputs => [Result];
+}

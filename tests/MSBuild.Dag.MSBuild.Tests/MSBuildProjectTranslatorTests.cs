@@ -781,15 +781,19 @@ public sealed class MSBuildProjectTranslatorTests
         var setMetadata = Assert.Single(
             build.Body.Operations.OfType<SetItemMetadataOperation>());
         var values = new ValueStore();
+        var messages = new List<string>();
 
         await new BuildProgramExecutor(
             result.Program,
             values,
-            CreateEvaluator().EvaluateAsync)
+            CreateEvaluator(
+                onMessage: (operation, store) =>
+                    messages.Add(store.Get(operation.Text)))
+                .EvaluateAsync)
             .ExecuteAsync(build);
 
         Assert.Equal(
-            ["OnDemand", "Text"],
+            ["OnDemand", "Text", "Text"],
             metadata.Select(operation => operation.MetadataName).ToArray());
         Assert.Same(metadata[0].Result, comparison.Values);
         Assert.Same(comparison.Result, setMetadata.Mask);
@@ -803,6 +807,9 @@ public sealed class MSBuildProjectTranslatorTests
         Assert.Equal(
             "- libs [only runs on demand]",
             items[1].Metadata["Text"]);
+        Assert.Equal(
+            ["- clr; - libs [only runs on demand]"],
+            messages);
     }
 
     [Fact]
@@ -1069,6 +1076,16 @@ public sealed class MSBuildProjectTranslatorTests
                         values.Get(operation.Values)
                             .Select(static value => !value)
                             .ToArray());
+                    return ValueTask.CompletedTask;
+                })
+            .Add<JoinItemValuesOperation>(
+                static (operation, values, _) =>
+                {
+                    values.Set(
+                        operation.Result,
+                        string.Join(
+                            values.Get(operation.Separator),
+                            values.Get(operation.Values)));
                     return ValueTask.CompletedTask;
                 })
             .Add<ProjectItemIdentitiesOperation>(

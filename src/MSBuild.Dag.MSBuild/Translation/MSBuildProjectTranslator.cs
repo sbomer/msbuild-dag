@@ -24,6 +24,9 @@ public sealed class MSBuildProjectTranslator
     private static readonly Regex s_itemMetadataReference = new(
         @"%\((?:(?<item>[^.()]+)\.)?(?<metadata>[^)]+)\)",
         RegexOptions.CultureInvariant);
+    private static readonly Regex s_itemMetadataTransform = new(
+        @"^\s*@\((?<item>[^()]+)->'%\((?<metadata>[^)]+)\)'(?:,\s*'(?<separator>[^']*)')?\)\s*$",
+        RegexOptions.CultureInvariant);
     private static readonly Regex s_propertyReference = new(
         @"\$\((?<property>[^()]+)\)",
         RegexOptions.CultureInvariant);
@@ -609,7 +612,7 @@ public sealed class MSBuildProjectTranslator
                         "Message",
                         StringComparison.OrdinalIgnoreCase))
                     {
-                        AddPropertyExpressionRead(
+                        AddMessageExpressionRead(
                             GetRequiredParameter(task, "Text"));
                         AddPropertyExpressionRead(
                             GetParameter(task, "Importance") ?? "normal");
@@ -637,6 +640,19 @@ public sealed class MSBuildProjectTranslator
             {
                 AddPropertyRead(propertyName);
             }
+        }
+
+        void AddMessageExpressionRead(string expression)
+        {
+            var transform = s_itemMetadataTransform.Match(expression);
+
+            if (transform.Success)
+            {
+                AddItemRead(transform.Groups["item"].Value);
+                return;
+            }
+
+            AddPropertyExpressionRead(expression);
         }
 
         void AddConditionRead(string expression)
@@ -1463,8 +1479,35 @@ public sealed class MSBuildProjectTranslator
             throw Unsupported("Message outputs");
         }
 
-        var text = context.ResolvePropertyExpression(
-            GetRequiredParameter(task, "Text"));
+        var textExpression = GetRequiredParameter(task, "Text");
+        var transform = s_itemMetadataTransform.Match(textExpression);
+        Value<string> text;
+
+        if (transform.Success)
+        {
+            var metadata = new GetItemMetadataOperation(
+                context.GetItems(transform.Groups["item"].Value),
+                transform.Groups["metadata"].Value,
+                context.TargetGuard);
+            var separator = new ConstantOperation<string>(
+                transform.Groups["separator"].Success
+                    ? transform.Groups["separator"].Value
+                    : ";",
+                context.TargetGuard);
+            var join = new JoinItemValuesOperation(
+                metadata.Result,
+                separator.Result,
+                context.TargetGuard);
+            context.AddOperation(metadata);
+            context.AddOperation(separator);
+            context.AddOperation(join);
+            text = join.Result;
+        }
+        else
+        {
+            text = context.ResolvePropertyExpression(textExpression);
+        }
+
         var importance = context.ResolvePropertyExpression(
             GetParameter(task, "Importance") ?? "normal");
 

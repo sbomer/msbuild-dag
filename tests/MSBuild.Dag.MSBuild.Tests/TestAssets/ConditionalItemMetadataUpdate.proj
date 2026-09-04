@@ -10,5 +10,8 @@
         Condition="'%(SubsetName.OnDemand)' == 'true'"
         Text="%(Text) [only runs on demand]" />
     </ItemGroup>
+    <Message
+      Importance="high"
+      Text="@(SubsetName->'%(Text)', '; ')" />
   </Target>
 </Project>

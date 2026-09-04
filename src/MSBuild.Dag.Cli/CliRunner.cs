@@ -187,6 +187,11 @@ internal static class CliRunner
             return "not each";
         }
 
+        if (operation is JoinItemValuesOperation)
+        {
+            return "join";
+        }
+
         if (!operation.GetType().IsGenericType)
         {
             return null;

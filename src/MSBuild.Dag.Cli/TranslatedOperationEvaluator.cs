@@ -155,6 +155,16 @@ internal static class TranslatedOperationEvaluator
                             .ToArray());
                     return ValueTask.CompletedTask;
                 })
+            .Add<JoinItemValuesOperation>(
+                static (operation, values, _) =>
+                {
+                    values.Set(
+                        operation.Result,
+                        string.Join(
+                            values.Get(operation.Separator),
+                            values.Get(operation.Values)));
+                    return ValueTask.CompletedTask;
+                })
             .Add<ProjectItemIdentitiesOperation>(
                 static (operation, values, _) =>
                 {
