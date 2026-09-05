@@ -735,6 +735,40 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Fact]
+    public async Task LowersGeneralExpressionsInConditionComparisons()
+    {
+        var result = TranslateAsset(
+            "GeneralConditionExpressions.proj",
+            "Build");
+        var build = result.Targets["Build"];
+        var isRunningFromVisualStudio =
+            Assert.IsType<Value<string>>(
+                result.IsRunningFromVisualStudio);
+        var file = Assert.Single(result.Files).Value;
+        var values = new ValueStore();
+
+        values.Set(isRunningFromVisualStudio, "true");
+        values.Set(file, new FileContents());
+
+        await new BuildProgramExecutor(
+            result.Program,
+            values,
+            CreateEvaluator().EvaluateAsync)
+            .ExecuteAsync(build);
+
+        Assert.Contains(
+            build.Body.Operations,
+            operation => operation is ConcatStringsOperation);
+        Assert.Contains(isRunningFromVisualStudio, result.Program.Inputs);
+        Assert.Equal(
+            "true",
+            values.Get(result.Properties["Interpolated"]));
+        Assert.Equal(
+            "true",
+            values.Get(result.Properties["VisualStudioFile"]));
+    }
+
+    [Fact]
     public async Task TranslatesItemIdentityConditionToContainsDataflow()
     {
         var result = TranslateAsset("ItemIdentityCondition.proj", "Build");

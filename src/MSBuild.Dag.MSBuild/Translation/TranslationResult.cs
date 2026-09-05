@@ -10,6 +10,7 @@ public sealed record TranslationResult(
     IReadOnlyDictionary<string, Value<string>> Properties,
     IReadOnlyDictionary<string, Value<IReadOnlyList<MSBuildItem>>> Items,
     IReadOnlyDictionary<string, Value<FileContents?>> Files,
+    Value<string>? IsRunningFromVisualStudio,
     IReadOnlyDictionary<Value, IReadOnlyList<ValueSymbol>> ValueSymbols,
     IReadOnlyDictionary<string, Value<bool>> TargetConditions,
     IReadOnlyList<string> Warnings);

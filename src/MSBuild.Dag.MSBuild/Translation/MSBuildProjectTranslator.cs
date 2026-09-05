@@ -23,15 +23,6 @@ public sealed class MSBuildProjectTranslator
         string? PropertyContent,
         string? ItemName);
 
-    private static readonly Regex s_comparisonCondition = new(
-        @"^\s*'\$\((?<property>[^)]+)\)'\s*(?<operator>==|!=)\s*'(?<literal>[^']*)'\s*$",
-        RegexOptions.CultureInvariant);
-    private static readonly Regex s_andCondition = new(
-        @"^\s*(?<left>.+?)\s+and\s+(?<right>.+?)\s*$",
-        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-    private static readonly Regex s_orCondition = new(
-        @"^\s*(?<left>.+?)\s+or\s+(?<right>.+?)\s*$",
-        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
     private static readonly Regex s_itemIdentityCondition = new(
         @"^\s*'%\((?<item>[^.()]+)\.Identity\)'\s*==\s*'(?<literal>[^']*)'\s*$",
         RegexOptions.CultureInvariant);
@@ -41,9 +32,6 @@ public sealed class MSBuildProjectTranslator
     private static readonly Regex s_existsCondition = new(
         @"^\s*Exists\(\s*'(?<path>[^']*)'\s*\)\s*$",
         RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-    private static readonly Regex s_notCondition = new(
-        @"^\s*!\s*(?<operand>.+)$",
-        RegexOptions.CultureInvariant);
     private static readonly Regex s_escapeSequence = new(
         @"%[0-9a-fA-F]{2}",
         RegexOptions.CultureInvariant);
@@ -109,6 +97,7 @@ public sealed class MSBuildProjectTranslator
                 StringComparer.OrdinalIgnoreCase);
         var fileLocations = new Dictionary<string, Location<FileContents?>>(
             StringComparer.Ordinal);
+        var isRunningFromVisualStudioLocation = new Location<string>();
         var valueSymbols = new ValueSymbolTableBuilder();
 
         foreach (var target in sourceTargets)
@@ -131,7 +120,8 @@ public sealed class MSBuildProjectTranslator
                     new HashSet<string>(),
                     new HashSet<string>(),
                     new HashSet<string>(),
-                    new HashSet<string>());
+                    new HashSet<string>(),
+                    false);
             }
 
             stateAccesses.Add(target, access);
@@ -214,6 +204,11 @@ public sealed class MSBuildProjectTranslator
                 path => path,
                 path => new TargetInput<FileContents?>(fileLocations[path]),
                 StringComparer.Ordinal);
+            var isRunningFromVisualStudioRead =
+                access.ReadsIsRunningFromVisualStudio
+                    ? new TargetInput<string>(
+                        isRunningFromVisualStudioLocation)
+                    : null;
             var context = new TranslationContext(
                 propertyReads.ToDictionary(
                     pair => pair.Key,
@@ -227,6 +222,7 @@ public sealed class MSBuildProjectTranslator
                     pair => pair.Key,
                     pair => pair.Value.Value,
                     StringComparer.Ordinal),
+                isRunningFromVisualStudioRead?.Value,
                 valueSymbols,
                 ResolveStaticFilePath,
                 ReportWarning);
@@ -293,6 +289,10 @@ public sealed class MSBuildProjectTranslator
                     propertyReads.Values.Cast<TargetInput>()
                         .Concat(itemReads.Values)
                         .Concat(fileReads.Values)
+                        .Concat(
+                            isRunningFromVisualStudioRead is null
+                                ? []
+                                : [isRunningFromVisualStudioRead])
                         .ToArray(),
                     [
                         .. access.WriteProperties.Select(
@@ -362,9 +362,17 @@ public sealed class MSBuildProjectTranslator
         }
 
         BuildLinkResult linked;
+        var definitionInputs = fileLocations.Values
+            .Cast<Location>()
+            .Concat(
+                stateAccesses.Values.Any(
+                    access => access.ReadsIsRunningFromVisualStudio)
+                    ? [isRunningFromVisualStudioLocation]
+                    : [])
+            .ToArray();
         var definition = new BuildDefinition(
             evaluation,
-            fileLocations.Values.ToArray(),
+            definitionInputs,
             sourceTargets
                 .Select(target => createdDefinitions[target])
                 .ToArray(),
@@ -477,6 +485,12 @@ public sealed class MSBuildProjectTranslator
             files.Add(path, (Value<FileContents?>)state[location]);
         }
 
+        var isRunningFromVisualStudio =
+            stateAccesses.Values.Any(
+                access => access.ReadsIsRunningFromVisualStudio)
+                ? (Value<string>)state[isRunningFromVisualStudioLocation]
+                : null;
+
         return new TranslationResult(
             definition,
             linked.Program,
@@ -485,6 +499,7 @@ public sealed class MSBuildProjectTranslator
             properties,
             items,
             files,
+            isRunningFromVisualStudio,
             valueSymbols.Build(),
             targetConditions,
             warnings);
@@ -688,6 +703,7 @@ public sealed class MSBuildProjectTranslator
         var writeItems = new HashSet<string>(
             StringComparer.OrdinalIgnoreCase);
         var readFiles = new HashSet<string>(StringComparer.Ordinal);
+        var readsIsRunningFromVisualStudio = false;
 
         if (!string.IsNullOrWhiteSpace(target.Condition))
         {
@@ -806,7 +822,8 @@ public sealed class MSBuildProjectTranslator
             writeProperties,
             readItems,
             writeItems,
-            readFiles);
+            readFiles,
+            readsIsRunningFromVisualStudio);
 
         void AddPropertyExpressionRead(string expression)
         {
@@ -818,6 +835,13 @@ public sealed class MSBuildProjectTranslator
             foreach (Match match in s_itemReference.Matches(expression))
             {
                 AddItemRead(match.Groups["item"].Value);
+            }
+
+            if (expression.Contains(
+                "$([MSBuild]::IsRunningFromVisualStudio())",
+                StringComparison.OrdinalIgnoreCase))
+            {
+                readsIsRunningFromVisualStudio = true;
             }
         }
 
@@ -836,37 +860,31 @@ public sealed class MSBuildProjectTranslator
 
         void AddConditionRead(string expression, string sourceFile)
         {
-            var match = s_comparisonCondition.Match(expression);
-
-            if (match.Success)
+            if (TrySplitLogicalCondition(
+                expression,
+                "or",
+                out var left,
+                out var right))
             {
-                AddPropertyRead(match.Groups["property"].Value);
+                AddConditionRead(left, sourceFile);
+                AddConditionRead(right, sourceFile);
                 return;
             }
 
-            var disjunction = s_orCondition.Match(expression);
-
-            if (disjunction.Success)
+            if (TrySplitLogicalCondition(
+                expression,
+                "and",
+                out left,
+                out right))
             {
-                AddConditionRead(disjunction.Groups["left"].Value, sourceFile);
-                AddConditionRead(disjunction.Groups["right"].Value, sourceFile);
+                AddConditionRead(left, sourceFile);
+                AddConditionRead(right, sourceFile);
                 return;
             }
 
-            var conjunction = s_andCondition.Match(expression);
-
-            if (conjunction.Success)
+            if (TryParseNegation(expression, out var operand))
             {
-                AddConditionRead(conjunction.Groups["left"].Value, sourceFile);
-                AddConditionRead(conjunction.Groups["right"].Value, sourceFile);
-                return;
-            }
-
-            var negation = s_notCondition.Match(expression);
-
-            if (negation.Success)
-            {
-                AddConditionRead(negation.Groups["operand"].Value, sourceFile);
+                AddConditionRead(operand, sourceFile);
                 return;
             }
 
@@ -881,7 +899,7 @@ public sealed class MSBuildProjectTranslator
                 return;
             }
 
-            match = s_itemIdentityCondition.Match(expression);
+            var match = s_itemIdentityCondition.Match(expression);
 
             if (match.Success)
             {
@@ -894,6 +912,17 @@ public sealed class MSBuildProjectTranslator
             if (match.Success)
             {
                 AddItemRead(match.Groups["item"].Value);
+                return;
+            }
+
+            if (TryParseStringComparison(
+                expression,
+                out left,
+                out _,
+                out right))
+            {
+                AddPropertyExpressionRead(left);
+                AddPropertyExpressionRead(right);
             }
         }
 
@@ -1406,26 +1435,187 @@ public sealed class MSBuildProjectTranslator
 
     private static bool IsScalarPropertyCondition(string expression)
     {
-        if (s_comparisonCondition.IsMatch(expression))
+        if (TryParseStringComparison(
+            expression,
+            out _,
+            out _,
+            out _))
         {
             return true;
         }
 
-        var disjunction = s_orCondition.Match(expression);
-
-        if (disjunction.Success)
+        if (TrySplitLogicalCondition(
+            expression,
+            "or",
+            out var left,
+            out var right))
         {
             return
-                IsScalarPropertyCondition(
-                    disjunction.Groups["left"].Value) &&
-                IsScalarPropertyCondition(
-                    disjunction.Groups["right"].Value);
+                IsScalarPropertyCondition(left) &&
+                IsScalarPropertyCondition(right);
         }
 
-        var conjunction = s_andCondition.Match(expression);
-        return conjunction.Success &&
-            IsScalarPropertyCondition(conjunction.Groups["left"].Value) &&
-            IsScalarPropertyCondition(conjunction.Groups["right"].Value);
+        return TrySplitLogicalCondition(
+                expression,
+                "and",
+                out left,
+                out right) &&
+            IsScalarPropertyCondition(left) &&
+            IsScalarPropertyCondition(right);
+    }
+
+    private static bool TrySplitLogicalCondition(
+        string expression,
+        string logicalOperator,
+        out string left,
+        out string right)
+    {
+        var span = expression.AsSpan();
+        var inQuote = false;
+        var parenthesisDepth = 0;
+
+        for (var index = 0; index <= span.Length - logicalOperator.Length; index++)
+        {
+            var character = span[index];
+
+            if (character == '\'')
+            {
+                inQuote = !inQuote;
+                continue;
+            }
+
+            if (inQuote)
+            {
+                continue;
+            }
+
+            if (character == '(')
+            {
+                parenthesisDepth++;
+                continue;
+            }
+
+            if (character == ')')
+            {
+                parenthesisDepth--;
+                continue;
+            }
+
+            if (parenthesisDepth != 0 ||
+                !span[index..].StartsWith(
+                    logicalOperator,
+                    StringComparison.OrdinalIgnoreCase) ||
+                index > 0 &&
+                !char.IsWhiteSpace(span[index - 1]) ||
+                index + logicalOperator.Length < span.Length &&
+                !char.IsWhiteSpace(span[index + logicalOperator.Length]))
+            {
+                continue;
+            }
+
+            left = expression[..index].Trim();
+            right = expression[(index + logicalOperator.Length)..].Trim();
+            return left.Length > 0 && right.Length > 0;
+        }
+
+        left = "";
+        right = "";
+        return false;
+    }
+
+    private static bool TryParseNegation(
+        string expression,
+        out string operand)
+    {
+        var trimmed = expression.Trim();
+
+        if (trimmed.StartsWith('!') &&
+            !trimmed.StartsWith("!=", StringComparison.Ordinal))
+        {
+            operand = trimmed[1..].Trim();
+            return operand.Length > 0;
+        }
+
+        operand = "";
+        return false;
+    }
+
+    private static bool TryParseStringComparison(
+        string expression,
+        out string left,
+        out string comparisonOperator,
+        out string right)
+    {
+        var span = expression.AsSpan().Trim();
+        var inQuote = false;
+        var parenthesisDepth = 0;
+
+        for (var index = 0; index < span.Length - 1; index++)
+        {
+            var character = span[index];
+
+            if (character == '\'')
+            {
+                inQuote = !inQuote;
+                continue;
+            }
+
+            if (inQuote)
+            {
+                continue;
+            }
+
+            if (character == '(')
+            {
+                parenthesisDepth++;
+                continue;
+            }
+
+            if (character == ')')
+            {
+                parenthesisDepth--;
+                continue;
+            }
+
+            if (parenthesisDepth != 0 ||
+                span[index..(index + 2)] is not "==" and not "!=")
+            {
+                continue;
+            }
+
+            var leftOperand = span[..index].Trim();
+            var rightOperand = span[(index + 2)..].Trim();
+
+            if (!TryUnquote(leftOperand, out left) ||
+                !TryUnquote(rightOperand, out right))
+            {
+                break;
+            }
+
+            comparisonOperator = span[index..(index + 2)].ToString();
+            return true;
+        }
+
+        left = "";
+        comparisonOperator = "";
+        right = "";
+        return false;
+
+        static bool TryUnquote(
+            ReadOnlySpan<char> operand,
+            out string content)
+        {
+            if (operand.Length >= 2 &&
+                operand[0] == '\'' &&
+                operand[^1] == '\'')
+            {
+                content = operand[1..^1].ToString();
+                return true;
+            }
+
+            content = "";
+            return false;
+        }
     }
 
     private static bool TryParseItemMetadataCondition(
@@ -1910,7 +2100,8 @@ public sealed class MSBuildProjectTranslator
         IReadOnlySet<string> WriteProperties,
         IReadOnlySet<string> ReadItems,
         IReadOnlySet<string> WriteItems,
-        IReadOnlySet<string> ReadFiles);
+        IReadOnlySet<string> ReadFiles,
+        bool ReadsIsRunningFromVisualStudio);
 
     private static MSBuildItem CreateItem(ProjectItemInstance item) =>
         new(
@@ -1932,6 +2123,7 @@ public sealed class MSBuildProjectTranslator
             IReadOnlyDictionary<string, Value<string>> properties,
             IReadOnlyDictionary<string, Value<IReadOnlyList<MSBuildItem>>> items,
             IReadOnlyDictionary<string, Value<FileContents?>> files,
+            Value<string>? isRunningFromVisualStudio,
             ValueSymbolTableBuilder valueSymbols,
             Func<string, string, string> resolveStaticFilePath,
             Action<string>? reportWarning = null)
@@ -1946,6 +2138,7 @@ public sealed class MSBuildProjectTranslator
             Files = new Dictionary<string, Value<FileContents?>>(
                 files,
                 StringComparer.Ordinal);
+            IsRunningFromVisualStudio = isRunningFromVisualStudio;
             ValueSymbols = valueSymbols;
             ResolveStaticFilePath = resolveStaticFilePath;
             ReportWarning = reportWarning;
@@ -1959,6 +2152,8 @@ public sealed class MSBuildProjectTranslator
         }
 
         public Dictionary<string, Value<FileContents?>> Files { get; }
+
+        private Value<string>? IsRunningFromVisualStudio { get; }
 
         private ValueSymbolTableBuilder ValueSymbols { get; }
 
@@ -2014,6 +2209,7 @@ public sealed class MSBuildProjectTranslator
                     StringComparer.OrdinalIgnoreCase);
             var files = new Dictionary<string, Value<FileContents?>>(
                 StringComparer.Ordinal);
+            Value<string>? isRunningFromVisualStudio = null;
 
             foreach (var (name, value) in Properties)
             {
@@ -2041,10 +2237,18 @@ public sealed class MSBuildProjectTranslator
                 files.Add(path, parameter);
             }
 
+            if (IsRunningFromVisualStudio is not null)
+            {
+                isRunningFromVisualStudio = new Value<string>();
+                arguments.Add(IsRunningFromVisualStudio);
+                parameters.Add(isRunningFromVisualStudio);
+            }
+
             var context = new TranslationContext(
                 properties,
                 items,
                 files,
+                isRunningFromVisualStudio,
                 ValueSymbols,
                 ResolveStaticFilePath,
                 ReportWarning);
@@ -2097,75 +2301,43 @@ public sealed class MSBuildProjectTranslator
             string expression,
             string sourceFile)
         {
-            var match = s_comparisonCondition.Match(expression);
-
-            if (match.Success)
+            if (TrySplitLogicalCondition(
+                expression,
+                "or",
+                out var leftExpression,
+                out var rightExpression))
             {
-                var left = GetProperty(match.Groups["property"].Value);
-                var right = AddConstant(match.Groups["literal"].Value);
-
-                DagOperation comparison = match.Groups["operator"].Value switch
-                {
-                    "==" => new EqualOperation<string>(left, right),
-                    "!=" => new NotEqualOperation<string>(left, right),
-                    _ => throw new InvalidOperationException(
-                        "The condition parser produced an unknown comparison operator."),
-                };
-
-                AddOperation(comparison);
-
-                return comparison switch
-                {
-                    EqualOperation<string> equal => equal.Result,
-                    NotEqualOperation<string> notEqual => notEqual.Result,
-                    _ => throw new InvalidOperationException(
-                        "The condition parser produced an unknown comparison operation."),
-                };
-            }
-
-            var disjunction = s_orCondition.Match(expression);
-
-            if (disjunction.Success)
-            {
-                var left = TranslateCondition(
-                    disjunction.Groups["left"].Value,
-                    sourceFile);
-                var right = TranslateCondition(
-                    disjunction.Groups["right"].Value,
-                    sourceFile);
+                var left = TranslateCondition(leftExpression, sourceFile);
+                var right = TranslateCondition(rightExpression, sourceFile);
                 var or = new OrOperation(left, right);
                 AddOperation(or);
                 return or.Result;
             }
 
-            var conjunction = s_andCondition.Match(expression);
-
-            if (conjunction.Success)
+            if (TrySplitLogicalCondition(
+                expression,
+                "and",
+                out leftExpression,
+                out rightExpression))
             {
-                var left = TranslateCondition(
-                    conjunction.Groups["left"].Value,
-                    sourceFile);
-                var right = TranslateCondition(
-                    conjunction.Groups["right"].Value,
-                    sourceFile);
+                var left = TranslateCondition(leftExpression, sourceFile);
+                var right = TranslateCondition(rightExpression, sourceFile);
                 var and = new AndOperation(left, right);
                 AddOperation(and);
                 return and.Result;
             }
 
-            var negation = s_notCondition.Match(expression);
-
-            if (negation.Success)
+            if (TryParseNegation(expression, out var operandExpression))
             {
                 var operand = TranslateCondition(
-                    negation.Groups["operand"].Value,
+                    operandExpression,
                     sourceFile);
                 var not = new NotOperation(operand);
                 AddOperation(not);
                 return not.Result;
             }
 
-            match = s_existsCondition.Match(expression);
+            var match = s_existsCondition.Match(expression);
 
             if (match.Success)
             {
@@ -2210,6 +2382,33 @@ public sealed class MSBuildProjectTranslator
                 var not = new NotOperation(isEmpty.Result);
                 AddOperation(not);
                 return not.Result;
+            }
+
+            if (TryParseStringComparison(
+                expression,
+                out leftExpression,
+                out var comparisonOperator,
+                out rightExpression))
+            {
+                var left = ResolvePropertyExpression(leftExpression);
+                var right = ResolvePropertyExpression(rightExpression);
+                DagOperation comparison = comparisonOperator switch
+                {
+                    "==" => new EqualOperation<string>(left, right),
+                    "!=" => new NotEqualOperation<string>(left, right),
+                    _ => throw new InvalidOperationException(
+                        "The condition parser produced an unknown comparison operator."),
+                };
+
+                AddOperation(comparison);
+
+                return comparison switch
+                {
+                    EqualOperation<string> equal => equal.Result,
+                    NotEqualOperation<string> notEqual => notEqual.Result,
+                    _ => throw new InvalidOperationException(
+                        "The condition parser produced an unknown comparison operation."),
+                };
             }
 
             throw Unsupported($"target condition '{expression}'");
@@ -2345,6 +2544,16 @@ public sealed class MSBuildProjectTranslator
                         TargetGuard);
                     AddOperation(operation);
                     return operation.Result;
+                }
+
+                if (content.Equals(
+                    "[MSBuild]::IsRunningFromVisualStudio()",
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    return IsRunningFromVisualStudio ??
+                        throw new InvalidOperationException(
+                            "The Visual Studio host input was not discovered " +
+                            "during target state analysis.");
                 }
 
                 var functionEnd = content.IndexOf(

@@ -60,6 +60,11 @@ internal static class CliRunner
                         : null);
             }
 
+            if (result.IsRunningFromVisualStudio is not null)
+            {
+                values.Set(result.IsRunningFromVisualStudio, "false");
+            }
+
             var executor = new BuildProgramExecutor(
                 result.Program,
                 values,

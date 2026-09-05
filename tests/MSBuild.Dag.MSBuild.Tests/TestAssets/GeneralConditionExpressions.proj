@@ -1,0 +1,16 @@
+<Project>
+  <PropertyGroup>
+    <Prefix>A</Prefix>
+    <Suffix>B</Suffix>
+    <Interpolated>false</Interpolated>
+    <VisualStudioFile>false</VisualStudioFile>
+  </PropertyGroup>
+
+  <Target Name="Build">
+    <PropertyGroup>
+      <Interpolated Condition="'$(Prefix)$(Suffix)' == 'AB'">true</Interpolated>
+      <VisualStudioFile
+        Condition="'$([MSBuild]::IsRunningFromVisualStudio())' == 'true' And Exists('existing.file')">true</VisualStudioFile>
+    </PropertyGroup>
+  </Target>
+</Project>
