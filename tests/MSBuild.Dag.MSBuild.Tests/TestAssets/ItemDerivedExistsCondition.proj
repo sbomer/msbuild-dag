@@ -1,0 +1,16 @@
+<Project>
+  <ItemGroup>
+    <Input Include="missing.txt" />
+  </ItemGroup>
+
+  <Target Name="Unsupported">
+    <ItemGroup>
+      <Existing Include="@(Input)"
+                Condition="Exists('%(Identity)')" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="Build">
+    <Message Text="build" />
+  </Target>
+</Project>

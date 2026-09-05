@@ -197,6 +197,12 @@ internal static class TranslatedOperationEvaluator
                         new InvalidOperationException(
                             $"Unsupported property function " +
                             $"'{operation.FunctionName}' was evaluated.")))
+            .Add<UnsupportedTargetOperation>(
+                static (operation, _, _) =>
+                    ValueTask.FromException(
+                        new InvalidOperationException(
+                            $"Target '{operation.TargetName}' cannot execute: " +
+                            operation.Reason)))
             .Add<FileExistsOperation>(
                 static (operation, values, _) =>
                 {

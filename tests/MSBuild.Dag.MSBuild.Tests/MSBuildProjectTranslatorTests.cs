@@ -1193,6 +1193,51 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Fact]
+    public async Task DefersItemDerivedFilePathFailureUntilTargetExecution()
+    {
+        var result = TranslateAsset(
+            "ItemDerivedExistsCondition.proj",
+            "Build");
+        var build = result.Targets["Build"];
+        var unsupported = result.Targets["Unsupported"];
+        var operation = Assert.Single(
+            unsupported.Body.Operations
+                .OfType<UnsupportedTargetOperation>());
+        var messages = new List<string>();
+
+        Assert.Contains(
+            result.Warnings,
+            warning =>
+                warning.Contains(
+                    "Target 'Unsupported' cannot be fully translated",
+                    StringComparison.Ordinal) &&
+                warning.Contains(
+                    "file path '%(Identity)' depends on item metadata",
+                    StringComparison.Ordinal));
+
+        await new BuildProgramExecutor(
+            result.Program,
+            new ValueStore(),
+            CreateEvaluator(
+                onMessage: (message, values) =>
+                    messages.Add(values.Get(message.Text))).EvaluateAsync)
+            .ExecuteAsync(build);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await new BuildProgramExecutor(
+                result.Program,
+                new ValueStore(),
+                CreateEvaluator().EvaluateAsync)
+                .ExecuteAsync(unsupported));
+
+        Assert.Equal(["build"], messages);
+        Assert.Equal("Unsupported", operation.TargetName);
+        Assert.Contains(
+            "file path '%(Identity)' depends on item metadata",
+            exception.Message);
+    }
+
+    [Fact]
     public async Task FalseTargetConditionPreventsTargetBodyExecution()
     {
         var projectPath = Path.Combine(
@@ -1479,6 +1524,12 @@ public sealed class MSBuildProjectTranslatorTests
                         new InvalidOperationException(
                             $"Unsupported property function " +
                             $"'{operation.FunctionName}' was evaluated.")))
+            .Add<UnsupportedTargetOperation>(
+                static (operation, _, _) =>
+                    ValueTask.FromException(
+                        new InvalidOperationException(
+                            $"Target '{operation.TargetName}' cannot execute: " +
+                            operation.Reason)))
             .Add<FileExistsOperation>(
                 static (operation, values, _) =>
                 {

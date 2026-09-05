@@ -9,6 +9,9 @@ namespace MSBuild.Dag.MSBuild;
 
 public sealed class MSBuildProjectTranslator
 {
+    private sealed class DeferredTargetTranslationException(string message)
+        : NotSupportedException(message);
+
     private sealed record PropertyReference(
         int Index,
         int Length,
@@ -96,6 +99,8 @@ public sealed class MSBuildProjectTranslator
             ReportWarning);
         var stateAccesses = new Dictionary<MSBuildTarget, TargetStateAccess>(
             ReferenceEqualityComparer.Instance);
+        var deferredTargets = new Dictionary<MSBuildTarget, string>(
+            ReferenceEqualityComparer.Instance);
         var propertyLocations =
             new Dictionary<string, Location<string>>(
                 StringComparer.OrdinalIgnoreCase);
@@ -108,7 +113,27 @@ public sealed class MSBuildProjectTranslator
 
         foreach (var target in sourceTargets)
         {
-            var access = GetTargetStateAccess(target, ResolveStaticFilePath);
+            TargetStateAccess access;
+
+            try
+            {
+                access = GetTargetStateAccess(target, ResolveStaticFilePath);
+            }
+            catch (DeferredTargetTranslationException exception)
+            {
+                var warning =
+                    $"Target '{target.Name}' cannot be fully translated: " +
+                    $"{exception.Message} The target will fail if executed.";
+                ReportWarning(warning);
+                deferredTargets.Add(target, exception.Message);
+                access = new TargetStateAccess(
+                    new HashSet<string>(),
+                    new HashSet<string>(),
+                    new HashSet<string>(),
+                    new HashSet<string>(),
+                    new HashSet<string>());
+            }
+
             stateAccesses.Add(target, access);
 
             foreach (var name in access.ReadProperties
@@ -159,6 +184,22 @@ public sealed class MSBuildProjectTranslator
 
         foreach (var target in sourceTargets)
         {
+            if (deferredTargets.TryGetValue(target, out var reason))
+            {
+                targetBodies.Add(
+                    target,
+                    new TargetBody(
+                        [],
+                        [],
+                        new OperationGraph(
+                        [
+                            new UnsupportedTargetOperation(
+                                target.Name,
+                                reason),
+                        ])));
+                continue;
+            }
+
             var access = stateAccesses[target];
             var propertyReads = access.ReadProperties.ToDictionary(
                 name => name,
@@ -458,6 +499,12 @@ public sealed class MSBuildProjectTranslator
             string expression,
             string sourceFile)
         {
+            if (s_itemMetadataReference.IsMatch(expression))
+            {
+                throw new DeferredTargetTranslationException(
+                    $"file path '{expression}' depends on item metadata.");
+            }
+
             if (s_itemReference.IsMatch(expression) ||
                 s_itemMetadataReference.IsMatch(expression) ||
                 s_escapeSequence.IsMatch(expression) ||
