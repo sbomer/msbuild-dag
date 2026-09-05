@@ -9,6 +9,11 @@ namespace MSBuild.Dag.MSBuild;
 
 public sealed class MSBuildProjectTranslator
 {
+    private readonly HashSet<string> _activeBuildRequests =
+        new(StringComparer.Ordinal);
+    private readonly Dictionary<string, TranslationResult>
+        _translatedInvocationPrograms = new(StringComparer.Ordinal);
+
     private sealed class DeferredTargetTranslationException(string message)
         : NotSupportedException(message);
 
@@ -60,13 +65,62 @@ public sealed class MSBuildProjectTranslator
     public TranslationResult Translate(
         string projectPath,
         string targetName,
-        Action<string>? reportWarning = null)
+        Action<string>? reportWarning = null) =>
+        Translate(
+            projectPath,
+            targetName,
+            new Dictionary<string, string>(
+                StringComparer.OrdinalIgnoreCase),
+            reportWarning);
+
+    private TranslationResult Translate(
+        string projectPath,
+        string targetName,
+        IReadOnlyDictionary<string, string> globalProperties,
+        Action<string>? reportWarning)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(projectPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(targetName);
+        ArgumentNullException.ThrowIfNull(globalProperties);
 
+        projectPath = Path.GetFullPath(projectPath);
+        var requestKey = CreateBuildRequestKey(
+            projectPath,
+            globalProperties);
+
+        if (!_activeBuildRequests.Add(requestKey))
+        {
+            throw Unsupported(
+                $"recursive MSBuild invocation of '{projectPath}'");
+        }
+
+        try
+        {
+            return TranslateCore(
+                projectPath,
+                targetName,
+                globalProperties,
+                reportWarning);
+        }
+        finally
+        {
+            _activeBuildRequests.Remove(requestKey);
+        }
+    }
+
+    private TranslationResult TranslateCore(
+        string projectPath,
+        string targetName,
+        IReadOnlyDictionary<string, string> globalProperties,
+        Action<string>? reportWarning)
+    {
         using var projectCollection = new ProjectCollection();
-        var project = projectCollection.LoadProject(Path.GetFullPath(projectPath));
+        var project = projectCollection.LoadProject(
+            projectPath,
+            new Dictionary<string, string>(
+                globalProperties,
+                StringComparer.OrdinalIgnoreCase),
+            toolsVersion: null);
         var projectInstance = project.CreateProjectInstance();
         var warnings = new List<string>();
 
@@ -80,6 +134,9 @@ public sealed class MSBuildProjectTranslator
         var sourceTargets = projectInstance.Targets.Values.ToArray();
         var targetPropertyAssignments =
             GetTargetPropertyAssignments(sourceTargets);
+        var msbuildInvocations =
+            new Dictionary<ProjectTaskInstance, PreparedMSBuildInvocation>(
+                ReferenceEqualityComparer.Instance);
         var links = GetTargetLinks(
             projectInstance,
             sourceTargets,
@@ -106,7 +163,10 @@ public sealed class MSBuildProjectTranslator
 
             try
             {
-                access = GetTargetStateAccess(target, ResolveStaticFilePath);
+                access = GetTargetStateAccess(
+                    target,
+                    ResolveStaticFilePath,
+                    PrepareMSBuildInvocation);
             }
             catch (DeferredTargetTranslationException exception)
             {
@@ -225,6 +285,7 @@ public sealed class MSBuildProjectTranslator
                 isRunningFromVisualStudioRead?.Value,
                 valueSymbols,
                 ResolveStaticFilePath,
+                PrepareMSBuildInvocation,
                 ReportWarning);
 
             foreach (var (name, read) in propertyReads)
@@ -575,6 +636,231 @@ public sealed class MSBuildProjectTranslator
             return Path.GetFullPath(result, baseDirectory);
         }
 
+        PreparedMSBuildInvocation PrepareMSBuildInvocation(
+            ProjectTaskInstance task)
+        {
+            if (msbuildInvocations.TryGetValue(task, out var prepared))
+            {
+                return prepared;
+            }
+
+            var targetsExpression = GetParameter(task, "Targets");
+            string? unsupportedReason = null;
+
+            if (targetsExpression is null)
+            {
+                unsupportedReason =
+                    "the restricted MSBuild task requires explicit Targets";
+            }
+            else if (task.Outputs.Count > 0)
+            {
+                unsupportedReason =
+                    "MSBuild task outputs are not supported";
+            }
+            else if (!string.IsNullOrWhiteSpace(task.ContinueOnError))
+            {
+                unsupportedReason =
+                    "MSBuild task ContinueOnError is not supported";
+            }
+            else if (task.Parameters.FirstOrDefault(
+                parameter =>
+                    !parameter.Key.Equals(
+                        "Projects",
+                        StringComparison.OrdinalIgnoreCase) &&
+                    !parameter.Key.Equals(
+                        "Targets",
+                        StringComparison.OrdinalIgnoreCase) &&
+                    !parameter.Key.Equals(
+                        "Properties",
+                        StringComparison.OrdinalIgnoreCase)) is
+                var unsupportedParameter &&
+                unsupportedParameter.Key is not null)
+            {
+                unsupportedReason =
+                    $"MSBuild task parameter " +
+                    $"'{unsupportedParameter.Key}' is not supported";
+            }
+            else if (task.Parameters.Any(
+                parameter => parameter.Value.Contains(
+                    "%(",
+                    StringComparison.Ordinal)) ||
+                task.Condition.Contains("%(", StringComparison.Ordinal))
+            {
+                unsupportedReason =
+                    "MSBuild task batching is not supported";
+            }
+
+            var projectsExpression = GetParameter(task, "Projects");
+            string? childProjectPath = null;
+            var projects = "";
+
+            if (unsupportedReason is null &&
+                projectsExpression is null)
+            {
+                unsupportedReason =
+                    "the MSBuild task requires the Projects parameter";
+            }
+            else if (unsupportedReason is null &&
+                !TryResolveStaticExpression(
+                    projectsExpression!,
+                    out projects))
+            {
+                unsupportedReason =
+                    $"MSBuild task project path '{projectsExpression}' is " +
+                    "not statically known";
+            }
+            else if (unsupportedReason is null)
+            {
+                var projectPaths = projects
+                    .Split(
+                        ';',
+                        StringSplitOptions.RemoveEmptyEntries |
+                        StringSplitOptions.TrimEntries);
+
+                if (projectPaths.Length != 1)
+                {
+                    unsupportedReason =
+                        "the restricted MSBuild task requires exactly one " +
+                        "project path";
+                }
+                else
+                {
+                    childProjectPath = Path.GetFullPath(
+                        projectPaths[0],
+                        Path.GetDirectoryName(projectPath)
+                            ?? Environment.CurrentDirectory);
+                }
+            }
+
+            var globalProperties = new Dictionary<string, string>(
+                projectInstance.GlobalProperties,
+                StringComparer.OrdinalIgnoreCase);
+            var propertiesExpression = GetParameter(task, "Properties");
+            var properties = "";
+
+            if (unsupportedReason is null &&
+                propertiesExpression is not null &&
+                !TryResolveStaticExpression(
+                    propertiesExpression,
+                    out properties))
+            {
+                unsupportedReason =
+                    $"MSBuild task global properties " +
+                    $"'{propertiesExpression}' are not statically known";
+            }
+            else if (unsupportedReason is null &&
+                propertiesExpression is not null)
+            {
+                foreach (var assignment in properties.Split(
+                    ';',
+                    StringSplitOptions.RemoveEmptyEntries |
+                    StringSplitOptions.TrimEntries))
+                {
+                    var separator = assignment.IndexOf('=');
+
+                    if (separator <= 0)
+                    {
+                        unsupportedReason =
+                            $"MSBuild task property '{assignment}' is not a " +
+                            "name=value assignment";
+                        break;
+                    }
+
+                    globalProperties[assignment[..separator].Trim()] =
+                        assignment[(separator + 1)..].Trim();
+                }
+            }
+
+            TranslationResult? child = null;
+
+            if (unsupportedReason is null)
+            {
+                using var childCollection = new ProjectCollection();
+                var childProject = childCollection.LoadProject(
+                    childProjectPath!,
+                    globalProperties,
+                    toolsVersion: null);
+                var childInstance = childProject.CreateProjectInstance();
+                var seedTarget = childInstance.Targets.Keys.FirstOrDefault();
+
+                if (seedTarget is null)
+                {
+                    unsupportedReason =
+                        $"MSBuild task project '{childProjectPath}' contains " +
+                        "no targets";
+                }
+                else
+                {
+                    var childRequestKey = CreateBuildRequestKey(
+                        childProjectPath!,
+                        globalProperties);
+
+                    if (!_translatedInvocationPrograms.TryGetValue(
+                        childRequestKey,
+                        out child))
+                    {
+                        child = Translate(
+                            childProjectPath!,
+                            seedTarget,
+                            globalProperties,
+                            ReportWarning);
+                        _translatedInvocationPrograms.Add(
+                            childRequestKey,
+                            child);
+                    }
+                }
+            }
+
+            prepared = new PreparedMSBuildInvocation(
+                childProjectPath,
+                targetsExpression ?? "",
+                child,
+                unsupportedReason);
+            msbuildInvocations.Add(task, prepared);
+            return prepared;
+
+            bool TryResolveStaticExpression(
+                string expression,
+                out string result)
+            {
+                if (s_itemMetadataReference.IsMatch(expression) ||
+                    s_itemReference.IsMatch(expression) ||
+                    s_escapeSequence.IsMatch(expression))
+                {
+                    result = "";
+                    return false;
+                }
+
+                result = expression;
+
+                foreach (var reference in FindPropertyReferences(
+                    expression).Reverse())
+                {
+                    if (reference.Content.Contains('(') ||
+                        reference.Content.Contains(')') ||
+                        reference.Content.Contains(
+                            "::",
+                            StringComparison.Ordinal) ||
+                        targetPropertyAssignments.ContainsKey(
+                            reference.Content))
+                    {
+                        result = "";
+                        return false;
+                    }
+
+                    result = result.Remove(
+                            reference.Index,
+                            reference.Length)
+                        .Insert(
+                            reference.Index,
+                            projectInstance.GetPropertyValue(
+                                reference.Content));
+                }
+
+                return !ContainsReference(result);
+            }
+        }
+
         string GetTargetName(TargetDefinition definition)
         {
             return createdDefinitions.Single(
@@ -692,7 +978,9 @@ public sealed class MSBuildProjectTranslator
 
     private static TargetStateAccess GetTargetStateAccess(
         MSBuildTarget target,
-        Func<string, string, string> resolveStaticFilePath)
+        Func<string, string, string> resolveStaticFilePath,
+        Func<ProjectTaskInstance, PreparedMSBuildInvocation>
+            prepareMSBuildInvocation)
     {
         var readProperties = new HashSet<string>(
             StringComparer.OrdinalIgnoreCase);
@@ -800,6 +1088,23 @@ public sealed class MSBuildProjectTranslator
                     {
                         AddPropertyExpressionRead(
                             GetRequiredParameter(task, "Text"));
+                    }
+                    else if (task.Name.Equals(
+                        "MSBuild",
+                        StringComparison.OrdinalIgnoreCase))
+                    {
+                        var invocation = prepareMSBuildInvocation(task);
+
+                        if (invocation.Child is not null)
+                        {
+                            AddPropertyExpressionRead(
+                                invocation.TargetsExpression);
+                            readFiles.UnionWith(
+                                invocation.Child.Files.Keys);
+                            readsIsRunningFromVisualStudio |=
+                                invocation.Child
+                                    .IsRunningFromVisualStudio is not null;
+                        }
                     }
 
                     foreach (var output in task.Outputs
@@ -1960,7 +2265,64 @@ public sealed class MSBuildProjectTranslator
             return;
         }
 
+        if (task.Name.Equals("MSBuild", StringComparison.OrdinalIgnoreCase))
+        {
+            TranslateMSBuild(task, context);
+            return;
+        }
+
         throw Unsupported($"task '{task.Name}'");
+    }
+
+    private static void TranslateMSBuild(
+        ProjectTaskInstance task,
+        TranslationContext context)
+    {
+        var invocation = context.PrepareMSBuildInvocation(task);
+
+        if (invocation.UnsupportedReason is not null)
+        {
+            context.ReportTranslationWarning(
+                $"MSBuild task cannot be fully translated: " +
+                $"{invocation.UnsupportedReason}. The task will fail if " +
+                "executed.");
+            context.AddOperation(
+                new UnsupportedTaskOperation(
+                    task.Name,
+                    invocation.UnsupportedReason,
+                    context.CreateControl()));
+            return;
+        }
+
+        var child = invocation.Child ??
+            throw new InvalidOperationException(
+                "A supported MSBuild invocation must have a translated child " +
+                "program.");
+        var fileInputBindings = child.Files
+            .Select(pair => new MSBuildFileInputBinding(
+                context.GetFileContents(pair.Key),
+                pair.Value))
+            .ToList();
+        var stringInputBindings = new List<MSBuildStringInputBinding>();
+
+        if (child.IsRunningFromVisualStudio is not null)
+        {
+            stringInputBindings.Add(
+                new MSBuildStringInputBinding(
+                    context.GetIsRunningFromVisualStudio(),
+                    child.IsRunningFromVisualStudio));
+        }
+
+        context.AddOperation(
+            new MSBuildInvocationOperation(
+                invocation.ProjectPath!,
+                child.Program,
+                child.Targets,
+                context.ResolvePropertyExpression(
+                    invocation.TargetsExpression),
+                fileInputBindings,
+                stringInputBindings,
+                context.CreateControl()));
     }
 
     private static void TranslateError(
@@ -2088,6 +2450,17 @@ public sealed class MSBuildProjectTranslator
         return parameter.Key is null ? null : parameter.Value;
     }
 
+    private static string CreateBuildRequestKey(
+        string path,
+        IReadOnlyDictionary<string, string> properties) =>
+        Path.GetFullPath(path) + "\n" + string.Join(
+            "\n",
+            properties
+                .OrderBy(
+                    pair => pair.Key,
+                    StringComparer.OrdinalIgnoreCase)
+                .Select(pair => $"{pair.Key}={pair.Value}"));
+
     private static bool TryGetReference(
         string expression,
         string prefix,
@@ -2152,6 +2525,12 @@ public sealed class MSBuildProjectTranslator
         string TargetName,
         string AttributeName);
 
+    private sealed record PreparedMSBuildInvocation(
+        string? ProjectPath,
+        string TargetsExpression,
+        TranslationResult? Child,
+        string? UnsupportedReason);
+
     private sealed record TargetStateAccess(
         IReadOnlySet<string> ReadProperties,
         IReadOnlySet<string> WriteProperties,
@@ -2183,6 +2562,8 @@ public sealed class MSBuildProjectTranslator
             Value<string>? isRunningFromVisualStudio,
             ValueSymbolTableBuilder valueSymbols,
             Func<string, string, string> resolveStaticFilePath,
+            Func<ProjectTaskInstance, PreparedMSBuildInvocation>
+                prepareMSBuildInvocation,
             Action<string>? reportWarning = null)
         {
             Properties = new Dictionary<string, Value<string>>(
@@ -2198,6 +2579,7 @@ public sealed class MSBuildProjectTranslator
             IsRunningFromVisualStudio = isRunningFromVisualStudio;
             ValueSymbols = valueSymbols;
             ResolveStaticFilePath = resolveStaticFilePath;
+            PrepareMSBuildInvocation = prepareMSBuildInvocation;
             ReportWarning = reportWarning;
         }
 
@@ -2215,6 +2597,9 @@ public sealed class MSBuildProjectTranslator
         private ValueSymbolTableBuilder ValueSymbols { get; }
 
         private Func<string, string, string> ResolveStaticFilePath { get; }
+
+        public Func<ProjectTaskInstance, PreparedMSBuildInvocation>
+            PrepareMSBuildInvocation { get; }
 
         private Action<string>? ReportWarning { get; }
 
@@ -2308,6 +2693,7 @@ public sealed class MSBuildProjectTranslator
                 isRunningFromVisualStudio,
                 ValueSymbols,
                 ResolveStaticFilePath,
+                PrepareMSBuildInvocation,
                 ReportWarning);
 
             if (TargetGuard is not null)
@@ -2471,11 +2857,20 @@ public sealed class MSBuildProjectTranslator
             throw Unsupported($"target condition '{expression}'");
         }
 
-        private Value<FileContents?> GetFileContents(string path) =>
+        public Value<FileContents?> GetFileContents(string path) =>
             Files.TryGetValue(path, out var contents)
                 ? contents
                 : throw new InvalidOperationException(
                     $"File state '{path}' was not discovered during analysis.");
+
+        public Value<string> GetIsRunningFromVisualStudio() =>
+            IsRunningFromVisualStudio ??
+            throw new InvalidOperationException(
+                "The Visual Studio host input was not discovered during " +
+                "target state analysis.");
+
+        public void ReportTranslationWarning(string warning) =>
+            ReportWarning?.Invoke(warning);
 
         public Value<string> ResolvePropertyExpression(string expression)
         {

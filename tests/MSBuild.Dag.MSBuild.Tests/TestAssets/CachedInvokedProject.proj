@@ -1,0 +1,16 @@
+<Project>
+  <PropertyGroup>
+    <State>initial</State>
+  </PropertyGroup>
+
+  <Target Name="First">
+    <PropertyGroup>
+      <State>changed</State>
+    </PropertyGroup>
+    <Message Text="first" />
+  </Target>
+
+  <Target Name="Second" DependsOnTargets="First">
+    <Message Text="$(State)" />
+  </Target>
+</Project>

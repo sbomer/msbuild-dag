@@ -65,10 +65,11 @@ internal static class CliRunner
                 values.Set(result.IsRunningFromVisualStudio, "false");
             }
 
+            var operationEvaluator = new TranslatedOperationEvaluator();
             var executor = new BuildProgramExecutor(
                 result.Program,
                 values,
-                TranslatedOperationEvaluator.EvaluateAsync);
+                operationEvaluator.EvaluateAsync);
 
             await executor.ExecuteAsync(result.Targets[targetName]);
 
@@ -235,6 +236,16 @@ internal static class CliRunner
         if (operation is UnsupportedTargetOperation)
         {
             return "unsupported target";
+        }
+
+        if (operation is MSBuildInvocationOperation invocation)
+        {
+            return $"MSBuild {Path.GetFileName(invocation.ProjectPath)}";
+        }
+
+        if (operation is UnsupportedTaskOperation)
+        {
+            return "unsupported task";
         }
 
         if (operation is ErrorOperation)

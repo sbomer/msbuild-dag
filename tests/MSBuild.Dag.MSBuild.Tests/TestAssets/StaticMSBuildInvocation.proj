@@ -1,0 +1,16 @@
+<Project>
+  <PropertyGroup>
+    <RequestedTarget>unset</RequestedTarget>
+  </PropertyGroup>
+
+  <Target Name="Build">
+    <PropertyGroup>
+      <RequestedTarget>Restore</RequestedTarget>
+    </PropertyGroup>
+
+    <MSBuild
+      Projects="StaticInvokedProject.proj"
+      Targets="$(RequestedTarget)"
+      Properties="Flavor=child" />
+  </Target>
+</Project>

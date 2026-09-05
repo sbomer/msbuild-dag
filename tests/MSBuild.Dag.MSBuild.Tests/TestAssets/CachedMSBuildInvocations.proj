@@ -1,0 +1,6 @@
+<Project>
+  <Target Name="Build">
+    <MSBuild Projects="CachedInvokedProject.proj" Targets="First" />
+    <MSBuild Projects="CachedInvokedProject.proj" Targets="Second" />
+  </Target>
+</Project>

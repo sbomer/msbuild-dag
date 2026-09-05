@@ -769,6 +769,95 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Fact]
+    public async Task ExecutesStaticallyKnownMSBuildInvocation()
+    {
+        var result = TranslateAsset("StaticMSBuildInvocation.proj", "Build");
+        var build = result.Targets["Build"];
+        var invocation = Assert.Single(
+            build.Body.Operations.OfType<MSBuildInvocationOperation>());
+        var messages = new List<string>();
+        var values = new ValueStore();
+
+        await new BuildProgramExecutor(
+            result.Program,
+            values,
+            CreateEvaluator(
+                onMessage: (operation, store) =>
+                    messages.Add(store.Get(operation.Text))).EvaluateAsync)
+            .ExecuteAsync(build);
+
+        Assert.EndsWith(
+            "StaticInvokedProject.proj",
+            invocation.ProjectPath,
+            StringComparison.Ordinal);
+        Assert.Equal(["child"], messages);
+    }
+
+    [Fact]
+    public async Task ReusesCachedChildProjectExecutionState()
+    {
+        var result = TranslateAsset("CachedMSBuildInvocations.proj", "Build");
+        var invocations = result.Targets["Build"].Body.Operations
+            .OfType<MSBuildInvocationOperation>()
+            .ToArray();
+        var messages = new List<string>();
+
+        await new BuildProgramExecutor(
+            result.Program,
+            new ValueStore(),
+            CreateEvaluator(
+                onMessage: (operation, store) =>
+                    messages.Add(store.Get(operation.Text))).EvaluateAsync)
+            .ExecuteAsync(result.Targets["Build"]);
+
+        Assert.Equal(2, invocations.Length);
+        Assert.Same(invocations[0].Program, invocations[1].Program);
+        Assert.Equal(["first", "changed"], messages);
+    }
+
+    [Theory]
+    [InlineData("DynamicMSBuildInvocation.proj", true)]
+    [InlineData("SkippedDynamicMSBuildInvocation.proj", false)]
+    public async Task DefersDynamicMSBuildInvocationUntilExecution(
+        string assetName,
+        bool shouldThrow)
+    {
+        var warnings = new List<string>();
+        var projectPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "TestAssets",
+            assetName);
+        var result = new MSBuildProjectTranslator().Translate(
+            projectPath,
+            "Build",
+            warnings.Add);
+        var operation = Assert.Single(
+            result.Targets["Build"].Body.Operations
+                .SelectMany(FlattenOperations)
+                .OfType<UnsupportedTaskOperation>());
+        var execution = new BuildProgramExecutor(
+            result.Program,
+            new ValueStore(),
+            CreateEvaluator().EvaluateAsync)
+            .ExecuteAsync(result.Targets["Build"]);
+
+        Assert.Single(warnings);
+        Assert.Contains("not statically known", warnings[0]);
+        Assert.Equal("MSBuild", operation.TaskName);
+
+        if (shouldThrow)
+        {
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                async () => await execution);
+            Assert.Contains("not statically known", exception.Message);
+        }
+        else
+        {
+            await execution;
+        }
+    }
+
+    [Fact]
     public async Task TranslatesItemIdentityConditionToContainsDataflow()
     {
         var result = TranslateAsset("ItemIdentityCondition.proj", "Build");
@@ -1456,6 +1545,16 @@ public sealed class MSBuildProjectTranslatorTests
     private static OperationEvaluator CreateEvaluator(
         Action<ToyCompileOperation>? onCompile = null,
         Action<MessageOperation, ValueStore>? onMessage = null) =>
+        CreateEvaluator(
+            onCompile,
+            onMessage,
+            new Dictionary<BuildProgram, TestChildExecutionContext>(
+                ReferenceEqualityComparer.Instance));
+
+    private static OperationEvaluator CreateEvaluator(
+        Action<ToyCompileOperation>? onCompile,
+        Action<MessageOperation, ValueStore>? onMessage,
+        Dictionary<BuildProgram, TestChildExecutionContext> childExecutions) =>
         new OperationEvaluator()
             .Add<ConstantOperation<string>>(
                 static (operation, values, _) =>
@@ -1780,6 +1879,19 @@ public sealed class MSBuildProjectTranslatorTests
                     ValueTask.FromException(
                         new InvalidOperationException(
                             values.Get(operation.Text))))
+            .Add<MSBuildInvocationOperation>(
+                (operation, values, cancellationToken) =>
+                    ExecuteMSBuildInvocationAsync(
+                        operation,
+                        values,
+                        cancellationToken,
+                        onCompile,
+                        onMessage,
+                        childExecutions))
+            .Add<UnsupportedTaskOperation>(
+                static (operation, _, _) =>
+                    ValueTask.FromException(
+                        new InvalidOperationException(operation.Reason)))
             .Add<MissingTargetOperation>(
                 static (operation, _, _) =>
                     ValueTask.FromException(
@@ -1789,9 +1901,87 @@ public sealed class MSBuildProjectTranslatorTests
                             $"'{operation.MissingTargetName}' through " +
                             $"{operation.AttributeName}.")));
 
+    private static async ValueTask ExecuteMSBuildInvocationAsync(
+        MSBuildInvocationOperation operation,
+        ValueStore values,
+        CancellationToken cancellationToken,
+        Action<ToyCompileOperation>? onCompile,
+        Action<MessageOperation, ValueStore>? onMessage,
+        Dictionary<BuildProgram, TestChildExecutionContext> childExecutions)
+    {
+        if (!childExecutions.TryGetValue(operation.Program, out var execution))
+        {
+            var childValues = new ValueStore();
+            execution = new TestChildExecutionContext(
+                childValues,
+                new BuildProgramExecutor(
+                    operation.Program,
+                    childValues,
+                    CreateEvaluator(
+                        onCompile,
+                        onMessage,
+                        childExecutions).EvaluateAsync));
+            childExecutions.Add(operation.Program, execution);
+        }
+
+        if (!execution.InputsInitialized)
+        {
+            foreach (var binding in operation.FileInputBindings)
+            {
+                execution.Values.Set(
+                    binding.Destination,
+                    values.Get(binding.Source));
+            }
+
+            foreach (var binding in operation.StringInputBindings)
+            {
+                execution.Values.Set(
+                    binding.Destination,
+                    values.Get(binding.Source));
+            }
+
+            execution.InputsInitialized = true;
+        }
+
+        foreach (var targetName in values.Get(operation.RequestedTargets).Split(
+            ';',
+            StringSplitOptions.RemoveEmptyEntries |
+            StringSplitOptions.TrimEntries))
+        {
+            await execution.Executor.ExecuteAsync(
+                operation.Targets[targetName],
+                cancellationToken);
+        }
+    }
+
+    private sealed record TestChildExecutionContext(
+        ValueStore Values,
+        BuildProgramExecutor Executor)
+    {
+        public bool InputsInitialized { get; set; }
+    }
+
     private static string[] GetIdentities(
         IReadOnlyList<MSBuildItem> items) =>
         items.Select(static item => item.Identity).ToArray();
+
+    private static IEnumerable<Operation> FlattenOperations(
+        Operation operation)
+    {
+        yield return operation;
+
+        if (operation is not ConditionalRegionOperation conditional)
+        {
+            yield break;
+        }
+
+        foreach (var nested in conditional.WhenTrue.Operations
+            .Concat(conditional.WhenFalse.Operations)
+            .SelectMany(FlattenOperations))
+        {
+            yield return nested;
+        }
+    }
 
     private static Value GetExternalInput(
         Target target,

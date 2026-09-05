@@ -1,13 +1,19 @@
 using MSBuild.Dag.Core;
 using MSBuild.Dag.Execution;
 using MSBuild.Dag.MSBuild;
+using System.Runtime.ExceptionServices;
 
 namespace MSBuild.Dag.Cli;
 
-internal static class TranslatedOperationEvaluator
+internal sealed class TranslatedOperationEvaluator
 {
-    private static readonly OperationEvaluator s_evaluator =
-        new OperationEvaluator()
+    private readonly Dictionary<BuildProgram, ChildExecutionContext>
+        _childExecutions = new(ReferenceEqualityComparer.Instance);
+    private readonly OperationEvaluator _evaluator;
+
+    public TranslatedOperationEvaluator()
+    {
+        _evaluator = new OperationEvaluator()
             .Add<ConstantOperation<string>>(
                 static (operation, values, _) =>
                 {
@@ -281,6 +287,14 @@ internal static class TranslatedOperationEvaluator
                     ValueTask.FromException(
                         new InvalidOperationException(
                             values.Get(operation.Text))))
+            .Add<MSBuildInvocationOperation>(
+                ExecuteMSBuildInvocationAsync)
+            .Add<UnsupportedTaskOperation>(
+                static (operation, _, _) =>
+                    ValueTask.FromException(
+                        new InvalidOperationException(
+                            $"Task '{operation.TaskName}' cannot execute: " +
+                            operation.Reason)))
             .Add<MissingTargetOperation>(
                 static (operation, _, _) =>
                     ValueTask.FromException(
@@ -343,6 +357,91 @@ internal static class TranslatedOperationEvaluator
                         new GuardToken(values.Get(operation.Condition)));
                     return ValueTask.CompletedTask;
                 });
+    }
+
+    private async ValueTask ExecuteMSBuildInvocationAsync(
+        MSBuildInvocationOperation operation,
+        ValueStore parentValues,
+        CancellationToken cancellationToken)
+    {
+        if (!_childExecutions.TryGetValue(
+            operation.Program,
+            out var execution))
+        {
+            execution = new ChildExecutionContext(
+                operation.Program,
+                EvaluateAsync);
+            _childExecutions.Add(operation.Program, execution);
+        }
+
+        await execution.Gate.WaitAsync(cancellationToken);
+
+        try
+        {
+            execution.Failure?.Throw();
+
+            if (!execution.InputsInitialized)
+            {
+                foreach (var binding in operation.FileInputBindings)
+                {
+                    execution.Values.Set(
+                        binding.Destination,
+                        parentValues.Get(binding.Source));
+                }
+
+                foreach (var binding in operation.StringInputBindings)
+                {
+                    execution.Values.Set(
+                        binding.Destination,
+                        parentValues.Get(binding.Source));
+                }
+
+                execution.InputsInitialized = true;
+            }
+
+            var targetNames = parentValues.Get(operation.RequestedTargets)
+                .Split(
+                    ';',
+                    StringSplitOptions.RemoveEmptyEntries |
+                    StringSplitOptions.TrimEntries);
+
+            if (targetNames.Length == 0)
+            {
+                throw new InvalidOperationException(
+                    $"MSBuild invocation of '{operation.ProjectPath}' " +
+                    "requested no targets.");
+            }
+
+            try
+            {
+                foreach (var targetName in targetNames)
+                {
+                    if (!operation.Targets.TryGetValue(
+                        targetName,
+                        out var target))
+                    {
+                        throw new InvalidOperationException(
+                            $"Target '{targetName}' does not exist in invoked " +
+                            $"project '{operation.ProjectPath}'.");
+                    }
+
+                    await execution.Executor.ExecuteAsync(
+                        target,
+                        cancellationToken);
+                }
+            }
+            catch (Exception exception)
+                when (exception is not OperationCanceledException)
+            {
+                execution.Failure = ExceptionDispatchInfo.Capture(exception);
+                throw;
+            }
+        }
+        finally
+        {
+            execution.Gate.Release();
+        }
+    }
 
     private static void EnsureMatchingItemCounts(
         int expected,
@@ -355,9 +454,33 @@ internal static class TranslatedOperationEvaluator
         }
     }
 
-    public static ValueTask EvaluateAsync(
+    public ValueTask EvaluateAsync(
         Operation operation,
         ValueStore values,
         CancellationToken cancellationToken) =>
-        s_evaluator.EvaluateAsync(operation, values, cancellationToken);
+        _evaluator.EvaluateAsync(operation, values, cancellationToken);
+
+    private sealed class ChildExecutionContext
+    {
+        public ChildExecutionContext(
+            BuildProgram program,
+            Func<Operation, ValueStore, CancellationToken, ValueTask>
+                evaluateOperation)
+        {
+            Executor = new BuildProgramExecutor(
+                program,
+                Values,
+                evaluateOperation);
+        }
+
+        public ValueStore Values { get; } = new();
+
+        public BuildProgramExecutor Executor { get; }
+
+        public SemaphoreSlim Gate { get; } = new(1, 1);
+
+        public bool InputsInitialized { get; set; }
+
+        public ExceptionDispatchInfo? Failure { get; set; }
+    }
 }

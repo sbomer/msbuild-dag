@@ -1,0 +1,17 @@
+<Project>
+  <PropertyGroup>
+    <RunInvocation>false</RunInvocation>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InvocationProperty Include="Flavor=child" />
+  </ItemGroup>
+
+  <Target Name="Build">
+    <MSBuild
+      Projects="StaticInvokedProject.proj"
+      Targets="Restore"
+      Properties="@(InvocationProperty)"
+      Condition="'$(RunInvocation)' == 'true'" />
+  </Target>
+</Project>
