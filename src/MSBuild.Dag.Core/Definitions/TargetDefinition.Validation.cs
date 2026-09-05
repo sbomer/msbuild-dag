@@ -4,7 +4,7 @@ public sealed partial class TargetDefinition
 {
     private void Validate()
     {
-        var inputLocations = new HashSet<StateLocation>(
+        var inputLocations = new HashSet<Location>(
             ReferenceEqualityComparer.Instance);
         var inputValues = new HashSet<Value>(
             ReferenceEqualityComparer.Instance);
@@ -23,7 +23,7 @@ public sealed partial class TargetDefinition
             inputValues.Add(input.Value);
         }
 
-        var outputLocations = new HashSet<StateLocation>(
+        var outputLocations = new HashSet<Location>(
             ReferenceEqualityComparer.Instance);
 
         foreach (var output in Outputs)

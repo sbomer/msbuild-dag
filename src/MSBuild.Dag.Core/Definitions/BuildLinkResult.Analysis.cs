@@ -2,7 +2,7 @@ namespace MSBuild.Dag.Core;
 
 public sealed partial class BuildLinkResult
 {
-    public IReadOnlyDictionary<StateLocation, Value> GetStateAfter(
+    public IReadOnlyDictionary<Location, Value> GetStateAfter(
         TargetDefinition requestedTarget)
     {
         if (!_definitions.Contains(
@@ -14,7 +14,7 @@ public sealed partial class BuildLinkResult
                 nameof(requestedTarget));
         }
 
-        var state = new Dictionary<StateLocation, Value>(
+        var state = new Dictionary<Location, Value>(
             ReferenceEqualityComparer.Instance);
 
         foreach (var initialization in _evaluation.Initializations)

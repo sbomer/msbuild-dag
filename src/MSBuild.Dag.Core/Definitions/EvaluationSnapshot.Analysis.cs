@@ -3,6 +3,6 @@ namespace MSBuild.Dag.Core;
 public sealed partial class EvaluationSnapshot
 {
     internal StateInitialization? GetInitialization(
-        StateLocation location) =>
+        Location location) =>
         _initializations.GetValueOrDefault(location);
 }

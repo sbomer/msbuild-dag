@@ -5,7 +5,7 @@ public sealed class BuildDefinitionTests
     [Fact]
     public void LinksTargetInputToLatestOrderedOutput()
     {
-        var location = new StateLocation<string>();
+        var location = new Location<string>();
         var writtenValue = new Value<string>();
         var writeOperation = new TestOperation([], [writtenValue]);
         var writer = new TargetDefinition(
@@ -51,7 +51,7 @@ public sealed class BuildDefinitionTests
     [Fact]
     public void LinksTargetInputToEvaluationValueWithoutOutput()
     {
-        var location = new StateLocation<string>();
+        var location = new Location<string>();
         var initialization = new StateInitialization<string>(
             location,
             "initial");
@@ -88,7 +88,7 @@ public sealed class BuildDefinitionTests
     [Fact]
     public void RejectsUnorderedStateConflict()
     {
-        var location = new StateLocation<string>();
+        var location = new Location<string>();
         var writtenValue = new Value<string>();
         var writer = new TargetDefinition(
             [],
@@ -129,7 +129,7 @@ public sealed class BuildDefinitionTests
     [Fact]
     public void RejectsConditionalTargetOutput()
     {
-        var location = new StateLocation<string>();
+        var location = new Location<string>();
         var value = new Value<string>();
         var target = new TargetDefinition(
             [],

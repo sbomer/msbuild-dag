@@ -86,10 +86,10 @@ public sealed class MSBuildProjectTranslator
         var stateAccesses = new Dictionary<MSBuildTarget, TargetStateAccess>(
             ReferenceEqualityComparer.Instance);
         var propertyLocations =
-            new Dictionary<string, StateLocation<string>>(
+            new Dictionary<string, Location<string>>(
                 StringComparer.OrdinalIgnoreCase);
         var itemLocations =
-            new Dictionary<string, StateLocation<IReadOnlyList<MSBuildItem>>>(
+            new Dictionary<string, Location<IReadOnlyList<MSBuildItem>>>(
                 StringComparer.OrdinalIgnoreCase);
         var valueSymbols = new ValueSymbolTableBuilder();
 
@@ -101,14 +101,14 @@ public sealed class MSBuildProjectTranslator
             foreach (var name in access.ReadProperties
                 .Concat(access.WriteProperties))
             {
-                propertyLocations.TryAdd(name, new StateLocation<string>());
+                propertyLocations.TryAdd(name, new Location<string>());
             }
 
             foreach (var name in access.ReadItems.Concat(access.WriteItems))
             {
                 itemLocations.TryAdd(
                     name,
-                    new StateLocation<IReadOnlyList<MSBuildItem>>());
+                    new Location<IReadOnlyList<MSBuildItem>>());
             }
         }
 
@@ -416,7 +416,7 @@ public sealed class MSBuildProjectTranslator
                 pair => ReferenceEquals(pair.Value, definition)).Key.Name;
         }
 
-        (string Kind, string Name) GetStateName(StateLocation location)
+        (string Kind, string Name) GetStateName(Location location)
         {
             foreach (var (name, propertyLocation) in propertyLocations)
             {

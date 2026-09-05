@@ -3,7 +3,7 @@ namespace MSBuild.Dag.Core;
 public sealed class StateConflictException(
     TargetDefinition firstTarget,
     TargetDefinition secondTarget,
-    StateLocation location)
+    Location location)
     : InvalidOperationException(
         "Two unordered target definitions have conflicting state access.")
 {
@@ -11,7 +11,7 @@ public sealed class StateConflictException(
 
     public TargetDefinition SecondTarget { get; } = secondTarget;
 
-    public StateLocation Location { get; } = location;
+    public Location Location { get; } = location;
 }
 
 public sealed class TargetOrderCycleException(
@@ -32,11 +32,11 @@ public sealed class ConditionalTargetOutputException(
 
 public sealed class MissingTargetInputException(
     TargetDefinition target,
-    StateLocation location)
+    Location location)
     : InvalidOperationException(
         "A target input has no preceding output or evaluation-time value.")
 {
     public TargetDefinition Target { get; } = target;
 
-    public StateLocation Location { get; } = location;
+    public Location Location { get; } = location;
 }

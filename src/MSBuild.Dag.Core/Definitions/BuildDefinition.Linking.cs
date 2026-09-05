@@ -338,7 +338,7 @@ public sealed partial class BuildDefinition
 
     private Value GetReachingValue(
         TargetDefinition target,
-        StateLocation location,
+        Location location,
         IReadOnlyList<TargetDefinition> linkOrder,
         IReadOnlyDictionary<TargetDefinition, IReadOnlySet<TargetDefinition>>
             orderPredecessors,

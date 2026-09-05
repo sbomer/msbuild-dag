@@ -371,7 +371,7 @@ public sealed class BuildProgramExecutorTests
     [Fact]
     public async Task ExecutesTargetInputBoundToEvaluationSnapshot()
     {
-        var location = new StateLocation<int>();
+        var location = new Location<int>();
         var read = new TargetInput<int>(location);
         var operation = new UnaryOperation(read.Value);
         var definition = new TargetDefinition(
