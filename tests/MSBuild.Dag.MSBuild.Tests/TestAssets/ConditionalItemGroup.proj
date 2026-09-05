@@ -1,0 +1,18 @@
+<Project>
+  <PropertyGroup>
+    <EnableGroup>true</EnableGroup>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <I Include="existing" />
+    <Source Include="source" />
+  </ItemGroup>
+
+  <Target Name="Build">
+    <ItemGroup Condition="'$(EnableGroup)' == 'true'">
+      <I Include="a" />
+      <I Include="b" Condition="'@(Source)' != ''" />
+      <J Include="j" />
+    </ItemGroup>
+  </Target>
+</Project>

@@ -1273,9 +1273,66 @@ public sealed class MSBuildProjectTranslator
     {
         if (!string.IsNullOrWhiteSpace(itemGroup.Condition))
         {
-            throw Unsupported("ItemGroup conditions");
+            TranslateConditionalItemGroup(itemGroup, context);
+            return;
         }
 
+        TranslateItemGroupItems(itemGroup, context);
+    }
+
+    private static void TranslateConditionalItemGroup(
+        ProjectItemGroupTaskInstance itemGroup,
+        TranslationContext context)
+    {
+        var condition = context.TranslateCondition(
+            itemGroup.Condition,
+            itemGroup.Location.File);
+        var whenTrue = context.CreateBranch();
+        var whenFalse = context.CreateBranch();
+        var itemTypes = itemGroup.Items
+            .Select(item => item.ItemType)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        TranslateItemGroupItems(itemGroup, whenTrue.Context);
+
+        var whenTrueOutputs = new List<Value>(itemTypes.Length);
+        var whenFalseOutputs = new List<Value>(itemTypes.Length);
+        var outputs = new List<Value>(itemTypes.Length);
+
+        foreach (var itemType in itemTypes)
+        {
+            whenTrueOutputs.Add(whenTrue.Context.GetItems(itemType));
+            whenFalseOutputs.Add(whenFalse.Context.GetItems(itemType));
+            outputs.Add(new Value<IReadOnlyList<MSBuildItem>>());
+        }
+
+        context.AddOperation(
+            new ConditionalRegionOperation(
+                condition,
+                whenTrue.Arguments,
+                new OperationGraph(
+                    whenTrue.Parameters,
+                    whenTrue.Context.Operations,
+                    whenTrueOutputs),
+                new OperationGraph(
+                    whenFalse.Parameters,
+                    whenFalse.Context.Operations,
+                    whenFalseOutputs),
+                outputs));
+
+        for (var index = 0; index < itemTypes.Length; index++)
+        {
+            context.SetItems(
+                itemTypes[index],
+                (Value<IReadOnlyList<MSBuildItem>>)outputs[index]);
+        }
+    }
+
+    private static void TranslateItemGroupItems(
+        ProjectItemGroupTaskInstance itemGroup,
+        TranslationContext context)
+    {
         foreach (var item in itemGroup.Items)
         {
             if (IsMetadataUpdate(item))

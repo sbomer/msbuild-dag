@@ -958,6 +958,39 @@ public sealed class MSBuildProjectTranslatorTests
             GetIdentities(values.Get(result.Items["I"])));
     }
 
+    [Theory]
+    [InlineData("ConditionalItemGroup.proj", "existing;a;b", "j")]
+    [InlineData("SkippedConditionalItemGroup.proj", "existing", "")]
+    public async Task ExecutesConditionalItemGroup(
+        string assetName,
+        string expectedI,
+        string expectedJ)
+    {
+        var result = TranslateAsset(assetName, "Build");
+        var build = result.Targets["Build"];
+        var conditional = Assert.Single(
+            build.Body.Operations.OfType<ConditionalRegionOperation>());
+        var values = new ValueStore();
+
+        await new BuildProgramExecutor(
+            result.Program,
+            values,
+            CreateEvaluator().EvaluateAsync)
+            .ExecuteAsync(build);
+
+        Assert.Equal(2, conditional.Outputs.Count);
+        Assert.Equal(
+            expectedI.Split(
+                ';',
+                StringSplitOptions.RemoveEmptyEntries),
+            GetIdentities(values.Get(result.Items["I"])));
+        Assert.Equal(
+            expectedJ.Split(
+                ';',
+                StringSplitOptions.RemoveEmptyEntries),
+            GetIdentities(values.Get(result.Items["J"])));
+    }
+
     [Fact]
     public async Task InterpolatesItemIdentitiesIntoPropertyValues()
     {
