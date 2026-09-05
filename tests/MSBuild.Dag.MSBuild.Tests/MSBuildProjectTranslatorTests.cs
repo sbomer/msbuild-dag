@@ -150,8 +150,10 @@ public sealed class MSBuildProjectTranslatorTests
         var exception = Assert.Throws<NotSupportedException>(
             () => new MSBuildProjectTranslator().Translate(projectPath, "Build"));
 
-        Assert.Contains("target condition", exception.Message);
-        Assert.DoesNotContain("task conditions", exception.Message);
+        Assert.StartsWith(
+            "The restricted MSBuild translator does not support",
+            exception.Message,
+            StringComparison.Ordinal);
         Assert.DoesNotContain("orchestration", exception.Message);
     }
 
