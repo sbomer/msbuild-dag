@@ -522,13 +522,19 @@ public sealed class MSBuildProjectTranslator
             {
                 if (reference.Content.Contains('(') ||
                     reference.Content.Contains(')') ||
-                    reference.Content.Contains("::", StringComparison.Ordinal) ||
-                    targetPropertyAssignments.ContainsKey(reference.Content))
+                    reference.Content.Contains("::", StringComparison.Ordinal))
                 {
                     throw Unsupported(
                         $"file path '{expression}'; property " +
                         $"'$({reference.Content})' must be fixed during " +
                         "graph construction");
+                }
+
+                if (targetPropertyAssignments.ContainsKey(reference.Content))
+                {
+                    throw new DeferredTargetTranslationException(
+                        $"file path '{expression}' depends on target-assigned " +
+                        $"property '$({reference.Content})'.");
                 }
 
                 result = result.Remove(reference.Index, reference.Length)

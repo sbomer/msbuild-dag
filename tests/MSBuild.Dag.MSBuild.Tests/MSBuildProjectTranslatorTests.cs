@@ -1181,14 +1181,34 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Fact]
-    public void RejectsFilePathFromTargetAssignedProperty()
+    public async Task DefersTargetAssignedFilePathFailureUntilExecution()
     {
-        var exception = Assert.Throws<NotSupportedException>(
-            () => TranslateAsset("DynamicExistsCondition.proj", "Build"));
+        var result = TranslateAsset("DynamicExistsCondition.proj", "Build");
+        var build = result.Targets["Build"];
+        var operation = Assert.Single(
+            build.Body.Operations.OfType<UnsupportedTargetOperation>());
 
-        Assert.Contains("file path '$(CheckedPath)'", exception.Message);
         Assert.Contains(
-            "'$(CheckedPath)' must be fixed during graph construction",
+            result.Warnings,
+            warning =>
+                warning.Contains(
+                    "Target 'Build' cannot be fully translated",
+                    StringComparison.Ordinal) &&
+                warning.Contains(
+                    "file path '$(CheckedPath)' depends on target-assigned " +
+                    "property '$(CheckedPath)'",
+                    StringComparison.Ordinal));
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await new BuildProgramExecutor(
+                result.Program,
+                new ValueStore(),
+                CreateEvaluator().EvaluateAsync)
+                .ExecuteAsync(build));
+
+        Assert.Equal("Build", operation.TargetName);
+        Assert.Contains(
+            "file path '$(CheckedPath)' depends on target-assigned property",
             exception.Message);
     }
 
