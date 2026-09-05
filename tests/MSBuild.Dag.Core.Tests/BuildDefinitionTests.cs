@@ -12,7 +12,6 @@ public sealed class BuildDefinitionTests
             [],
             [],
             [new TargetOutput<string>(location, writtenValue)],
-            [],
             new OperationGraph([writeOperation]),
             []);
         var read = new TargetInput<string>(location);
@@ -21,8 +20,7 @@ public sealed class BuildDefinitionTests
         var reader = new TargetDefinition(
             [writer],
             [read],
-            [],
-            [result],
+            [new TargetOutput(result)],
             new OperationGraph([readOperation]),
             []);
 
@@ -60,8 +58,7 @@ public sealed class BuildDefinitionTests
         var target = new TargetDefinition(
             [],
             [read],
-            [],
-            [result],
+            [new TargetOutput(result)],
             new OperationGraph(
             [
                 new TestOperation([read.Value], [result]),
@@ -94,7 +91,6 @@ public sealed class BuildDefinitionTests
             [],
             [],
             [new TargetOutput<string>(location, writtenValue)],
-            [],
             new OperationGraph(
             [
                 new TestOperation([], [writtenValue]),
@@ -104,7 +100,6 @@ public sealed class BuildDefinitionTests
         var reader = new TargetDefinition(
             [],
             [read],
-            [],
             [],
             new OperationGraph(
             [
@@ -140,7 +135,6 @@ public sealed class BuildDefinitionTests
                     IsConditional = true,
                 },
             ],
-            [],
             new OperationGraph(
             [
                 new TestOperation([], [value]),

@@ -377,8 +377,7 @@ public sealed class BuildProgramExecutorTests
         var definition = new TargetDefinition(
             [],
             [read],
-            [],
-            [operation.Result],
+            [new TargetOutput(operation.Result)],
             new OperationGraph([operation]),
             []);
         var linked = new BuildDefinition(

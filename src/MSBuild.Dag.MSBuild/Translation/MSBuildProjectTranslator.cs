@@ -250,11 +250,13 @@ public sealed class MSBuildProjectTranslator
                                 IsConditional =
                                     !string.IsNullOrWhiteSpace(target.Condition),
                             }),
+                        .. targetCondition is null
+                            ? []
+                            : new TargetOutput[]
+                            {
+                                new(targetCondition),
+                            },
                     ],
-                    GetTargetOutputs(
-                        operationGraph,
-                        context,
-                        targetCondition),
                     operationGraph));
         }
 
@@ -271,7 +273,6 @@ public sealed class MSBuildProjectTranslator
                     [],
                     body.Inputs,
                     body.Outputs,
-                    body.Results,
                     body.Graph,
                     []));
         }
@@ -940,30 +941,6 @@ public sealed class MSBuildProjectTranslator
         {
             targets.Add(target);
         }
-    }
-
-    private static IReadOnlyList<Value> GetTargetOutputs(
-        OperationGraph graph,
-        TranslationContext context,
-        Value<bool>? targetCondition)
-    {
-        var outputs = new HashSet<Value>(ReferenceEqualityComparer.Instance);
-
-        foreach (var value in context.Properties.Values.Cast<Value>()
-            .Concat(context.Items.Values))
-        {
-            if (graph.GetProducer(value) is not null)
-            {
-                outputs.Add(value);
-            }
-        }
-
-        if (targetCondition is not null)
-        {
-            outputs.Add(targetCondition);
-        }
-
-        return outputs.ToArray();
     }
 
     private static void TranslatePropertyGroup(
@@ -1782,7 +1759,6 @@ public sealed class MSBuildProjectTranslator
     private sealed record TargetBody(
         IReadOnlyList<TargetInput> Inputs,
         IReadOnlyList<TargetOutput> Outputs,
-        IReadOnlyList<Value> Results,
         OperationGraph Graph);
 
     private sealed record TargetLinks(

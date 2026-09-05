@@ -51,7 +51,7 @@ public sealed partial class BuildDefinition
                 parameters.Add(input.Value);
             }
 
-            var bodyOutputs = new List<Value>(target.Results);
+            var bodyOutputs = new List<Value>(target.Outputs.Count);
 
             foreach (var output in target.Outputs)
             {
@@ -274,7 +274,9 @@ public sealed partial class BuildDefinition
     {
         foreach (var target in Targets)
         {
-            if (target.Outputs.Any(output => output.IsConditional))
+            if (target.Outputs.Any(
+                output => output.Location is not null &&
+                    output.IsConditional))
             {
                 throw new ConditionalTargetOutputException(target);
             }
@@ -301,7 +303,8 @@ public sealed partial class BuildDefinition
                     continue;
                 }
 
-                foreach (var firstOutput in first.Outputs)
+                foreach (var firstOutput in first.Outputs
+                    .Where(output => output.Location is not null))
                 {
                     if (second.Inputs.Any(
                         input => ReferenceEquals(
@@ -315,11 +318,12 @@ public sealed partial class BuildDefinition
                         throw new StateConflictException(
                             first,
                             second,
-                        firstOutput.Location);
+                        firstOutput.Location!);
                     }
                 }
 
-                foreach (var secondOutput in second.Outputs)
+                foreach (var secondOutput in second.Outputs
+                    .Where(output => output.Location is not null))
                 {
                     if (first.Inputs.Any(
                         input => ReferenceEquals(
@@ -329,7 +333,7 @@ public sealed partial class BuildDefinition
                         throw new StateConflictException(
                             first,
                             second,
-                        secondOutput.Location);
+                        secondOutput.Location!);
                     }
                 }
             }

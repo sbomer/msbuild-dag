@@ -49,6 +49,11 @@ public sealed partial class BuildLinkResult
 
             foreach (var output in target.Outputs)
             {
+                if (output.Location is null)
+                {
+                    continue;
+                }
+
                 var linkedTarget = Targets[target];
                 var outputIndex = IndexOfReference(
                     linkedTarget.Body.Outputs,

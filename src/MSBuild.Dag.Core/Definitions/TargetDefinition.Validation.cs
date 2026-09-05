@@ -30,7 +30,8 @@ public sealed partial class TargetDefinition
         {
             ArgumentNullException.ThrowIfNull(output);
 
-            if (!outputLocations.Add(output.Location))
+            if (output.Location is not null &&
+                !outputLocations.Add(output.Location))
             {
                 throw new ArgumentException(
                     "A target cannot bind the same output location more than once.",
@@ -62,16 +63,5 @@ public sealed partial class TargetDefinition
             }
         }
 
-        foreach (var result in Results)
-        {
-            ArgumentNullException.ThrowIfNull(result);
-
-            if (Body.GetProducer(result) is null)
-            {
-                throw new ArgumentException(
-                    "A target-definition result must be produced by its body.",
-                    nameof(Results));
-            }
-        }
     }
 }
