@@ -3014,6 +3014,12 @@ public sealed class MSBuildProjectTranslator
                 .OrderBy(reference => reference.Index)
                 .ToArray();
 
+            if (references.Length > 0 &&
+                ContainsUnparsedReference(expression, references))
+            {
+                return AddUnsupportedPropertyExpression(expression);
+            }
+
             if (references.Length > 0)
             {
                 Value<string>? result = null;
@@ -3055,12 +3061,6 @@ public sealed class MSBuildProjectTranslator
 
                 void AppendLiteral(string literal)
                 {
-                    if (ContainsReference(literal))
-                    {
-                        throw Unsupported(
-                            $"property expression '{expression}'");
-                    }
-
                     if (literal.Length > 0)
                     {
                         Append(AddConstant(literal));
@@ -3082,6 +3082,26 @@ public sealed class MSBuildProjectTranslator
                     AddOperation(concat);
                     result = concat.Result;
                 }
+            }
+
+            static bool ContainsUnparsedReference(
+                string value,
+                IReadOnlyList<ExpressionReference> parsedReferences)
+            {
+                var position = 0;
+
+                foreach (var reference in parsedReferences)
+                {
+                    if (ContainsReference(
+                        value[position..reference.Index]))
+                    {
+                        return true;
+                    }
+
+                    position = reference.Index + reference.Length;
+                }
+
+                return ContainsReference(value[position..]);
             }
 
             if (ContainsReference(expression))

@@ -1,0 +1,12 @@
+<Project>
+  <PropertyGroup>
+    <FileVersion>1.0.0</FileVersion>
+    <Info>+local</Info>
+  </PropertyGroup>
+
+  <Target Name="Build">
+    <PropertyGroup>
+      <Result>@(#)Version $(FileVersion)$(Info)</Result>
+    </PropertyGroup>
+  </Target>
+</Project>

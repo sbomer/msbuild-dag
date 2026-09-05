@@ -1080,10 +1080,19 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Theory]
-    [InlineData("UnsupportedPropertyExpression.proj", true)]
-    [InlineData("GuardedUnsupportedPropertyExpression.proj", false)]
+    [InlineData("UnsupportedPropertyExpression.proj", "FullPath", true)]
+    [InlineData("GuardedUnsupportedPropertyExpression.proj", "FullPath", false)]
+    [InlineData(
+        "UnsupportedSourcePackageVersionExpression.proj",
+        "@(#)Version",
+        true)]
+    [InlineData(
+        "GuardedUnsupportedSourcePackageVersionExpression.proj",
+        "@(#)Version",
+        false)]
     public async Task DefersUnsupportedPropertyExpressionUntilEvaluation(
         string assetName,
+        string expectedFragment,
         bool shouldThrow)
     {
         var warnings = new List<string>();
@@ -1107,13 +1116,13 @@ public sealed class MSBuildProjectTranslatorTests
 
         Assert.Single(warnings);
         Assert.Contains("Unsupported property expression", warnings[0]);
-        Assert.Equal("@(I->'%(FullPath)')", unsupported.Expression);
+        Assert.Contains(expectedFragment, unsupported.Expression);
 
         if (shouldThrow)
         {
             var exception = await Assert.ThrowsAsync<InvalidOperationException>(
                 async () => await execution);
-            Assert.Contains("FullPath", exception.Message);
+            Assert.Contains(expectedFragment, exception.Message);
         }
         else
         {

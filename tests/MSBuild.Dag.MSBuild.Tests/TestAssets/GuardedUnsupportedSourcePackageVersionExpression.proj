@@ -1,0 +1,14 @@
+<Project>
+  <PropertyGroup>
+    <Run>false</Run>
+    <FileVersion>1.0.0</FileVersion>
+    <Info>+local</Info>
+  </PropertyGroup>
+
+  <Target Name="Build">
+    <PropertyGroup>
+      <Result
+        Condition="'$(Run)' == 'true'">@(#)Version $(FileVersion)$(Info)</Result>
+    </PropertyGroup>
+  </Target>
+</Project>
