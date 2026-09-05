@@ -6,16 +6,26 @@ public sealed partial class BuildProgram
         : this(
             targets,
             new Dictionary<Value, object?>(
-                ReferenceEqualityComparer.Instance))
+                ReferenceEqualityComparer.Instance),
+            [])
     {
     }
 
     public BuildProgram(
         IReadOnlyList<Target> targets,
         IReadOnlyDictionary<Value, object?> initialValues)
+        : this(targets, initialValues, [])
+    {
+    }
+
+    public BuildProgram(
+        IReadOnlyList<Target> targets,
+        IReadOnlyDictionary<Value, object?> initialValues,
+        IReadOnlyList<Value> inputs)
     {
         ArgumentNullException.ThrowIfNull(targets);
         ArgumentNullException.ThrowIfNull(initialValues);
+        ArgumentNullException.ThrowIfNull(inputs);
 
         Targets = targets.ToArray();
         var copiedInitialValues = new Dictionary<Value, object?>(
@@ -32,9 +42,11 @@ public sealed partial class BuildProgram
             new System.Collections.ObjectModel.ReadOnlyDictionary<
                 Value,
                 object?>(copiedInitialValues);
+        Inputs = inputs.ToArray();
 
         var operationOwners = RegisterTargets();
         ValidateInitialValues(operationOwners);
+        ValidateInputs(operationOwners);
         ValidateTargetReferences();
         ValidateCrossTargetConnections(operationOwners);
         BuildPrecedence();
@@ -44,4 +56,6 @@ public sealed partial class BuildProgram
     public IReadOnlyList<Target> Targets { get; }
 
     public IReadOnlyDictionary<Value, object?> InitialValues { get; }
+
+    public IReadOnlyList<Value> Inputs { get; }
 }

@@ -42,6 +42,23 @@ public sealed partial class BuildDefinition
             initialContents.Add(value, content);
         }
 
+        var inputValues = new Dictionary<Location, Value>(
+            ReferenceEqualityComparer.Instance);
+
+        foreach (var location in Inputs)
+        {
+            inputValues.Add(location, location.CreateValue());
+        }
+
+        var entryValues = new Dictionary<Location, Value>(
+            initialValues,
+            ReferenceEqualityComparer.Instance);
+
+        foreach (var (location, value) in inputValues)
+        {
+            entryValues.Add(location, value);
+        }
+
         var linkedBodies = new Dictionary<TargetDefinition, LinkedTargetBody>(
             ReferenceEqualityComparer.Instance);
         var exports =
@@ -60,7 +77,7 @@ public sealed partial class BuildDefinition
                     input.Location,
                     linkOrder,
                     orderPredecessors,
-                    initialValues,
+                    entryValues,
                     exports);
                 inputs.Add(source);
                 parameters.Add(input.Value);
@@ -130,7 +147,8 @@ public sealed partial class BuildDefinition
 
         var program = new BuildProgram(
             Targets.Select(target => linkedTargets[target]).ToArray(),
-            initialContents);
+            initialContents,
+            inputValues.Values.ToArray());
 
         return new BuildLinkResult(
             program,
@@ -138,7 +156,8 @@ public sealed partial class BuildDefinition
                 linkedTargets,
                 ReferenceEqualityComparer.Instance),
             this,
-            initialValues);
+            initialValues,
+            inputValues);
     }
 
     private void ValidateReferences(

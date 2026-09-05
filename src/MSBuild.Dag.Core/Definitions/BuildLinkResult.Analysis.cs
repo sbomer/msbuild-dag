@@ -22,6 +22,11 @@ public sealed partial class BuildLinkResult
             state.Add(location, value);
         }
 
+        foreach (var (location, value) in Inputs)
+        {
+            state.Add(location, value);
+        }
+
         var activated = new HashSet<TargetDefinition>(
             ReferenceEqualityComparer.Instance);
         Activate(requestedTarget);

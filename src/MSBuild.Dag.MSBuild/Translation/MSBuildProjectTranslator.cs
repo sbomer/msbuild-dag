@@ -35,6 +35,15 @@ public sealed class MSBuildProjectTranslator
     private static readonly Regex s_itemListCondition = new(
         @"^\s*'@\((?<item>[^)]+)\)'\s*(?<operator>==|!=)\s*'(?<literal>[^']*)'\s*$",
         RegexOptions.CultureInvariant);
+    private static readonly Regex s_existsCondition = new(
+        @"^\s*Exists\(\s*'(?<path>[^']*)'\s*\)\s*$",
+        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+    private static readonly Regex s_notCondition = new(
+        @"^\s*!\s*(?<operand>.+)$",
+        RegexOptions.CultureInvariant);
+    private static readonly Regex s_escapeSequence = new(
+        @"%[0-9a-fA-F]{2}",
+        RegexOptions.CultureInvariant);
     private static readonly Regex s_itemMetadataCondition = new(
         @"^\s*'%\((?:(?<item>[^.()]+)\.)?(?<metadata>[^)]+)\)'\s*(?<operator>==|!=)\s*'(?<literal>[^']*)'\s*$",
         RegexOptions.CultureInvariant);
@@ -78,10 +87,12 @@ public sealed class MSBuildProjectTranslator
         }
 
         var sourceTargets = projectInstance.Targets.Values.ToArray();
+        var targetPropertyAssignments =
+            GetTargetPropertyAssignments(sourceTargets);
         var links = GetTargetLinks(
             projectInstance,
             sourceTargets,
-            GetTargetPropertyAssignments(sourceTargets),
+            targetPropertyAssignments,
             ReportWarning);
         var stateAccesses = new Dictionary<MSBuildTarget, TargetStateAccess>(
             ReferenceEqualityComparer.Instance);
@@ -91,11 +102,13 @@ public sealed class MSBuildProjectTranslator
         var itemLocations =
             new Dictionary<string, Location<IReadOnlyList<MSBuildItem>>>(
                 StringComparer.OrdinalIgnoreCase);
+        var fileLocations = new Dictionary<string, Location<FileContents?>>(
+            StringComparer.Ordinal);
         var valueSymbols = new ValueSymbolTableBuilder();
 
         foreach (var target in sourceTargets)
         {
-            var access = GetTargetStateAccess(target);
+            var access = GetTargetStateAccess(target, ResolveStaticFilePath);
             stateAccesses.Add(target, access);
 
             foreach (var name in access.ReadProperties
@@ -109,6 +122,13 @@ public sealed class MSBuildProjectTranslator
                 itemLocations.TryAdd(
                     name,
                     new Location<IReadOnlyList<MSBuildItem>>());
+            }
+
+            foreach (var path in access.ReadFiles)
+            {
+                fileLocations.TryAdd(
+                    path,
+                    new Location<FileContents?>());
             }
         }
 
@@ -149,6 +169,10 @@ public sealed class MSBuildProjectTranslator
                 name => new TargetInput<IReadOnlyList<MSBuildItem>>(
                     itemLocations[name]),
                 StringComparer.OrdinalIgnoreCase);
+            var fileReads = access.ReadFiles.ToDictionary(
+                path => path,
+                path => new TargetInput<FileContents?>(fileLocations[path]),
+                StringComparer.Ordinal);
             var context = new TranslationContext(
                 propertyReads.ToDictionary(
                     pair => pair.Key,
@@ -158,7 +182,12 @@ public sealed class MSBuildProjectTranslator
                     pair => pair.Key,
                     pair => pair.Value.Value,
                     StringComparer.OrdinalIgnoreCase),
+                fileReads.ToDictionary(
+                    pair => pair.Key,
+                    pair => pair.Value.Value,
+                    StringComparer.Ordinal),
                 valueSymbols,
+                ResolveStaticFilePath,
                 ReportWarning);
 
             foreach (var (name, read) in propertyReads)
@@ -174,7 +203,9 @@ public sealed class MSBuildProjectTranslator
 
             if (!string.IsNullOrWhiteSpace(target.Condition))
             {
-                targetCondition = context.TranslateCondition(target.Condition);
+                targetCondition = context.TranslateCondition(
+                    target.Condition,
+                    target.Location.File);
                 targetConditions.Add(target.Name, targetCondition);
                 context.SetTargetGuard(context.CreateGuard(targetCondition));
             }
@@ -220,6 +251,7 @@ public sealed class MSBuildProjectTranslator
                 new TargetBody(
                     propertyReads.Values.Cast<TargetInput>()
                         .Concat(itemReads.Values)
+                        .Concat(fileReads.Values)
                         .ToArray(),
                     [
                         .. access.WriteProperties.Select(
@@ -291,6 +323,7 @@ public sealed class MSBuildProjectTranslator
         BuildLinkResult linked;
         var definition = new BuildDefinition(
             evaluation,
+            fileLocations.Values.ToArray(),
             sourceTargets
                 .Select(target => createdDefinitions[target])
                 .ToArray(),
@@ -379,6 +412,8 @@ public sealed class MSBuildProjectTranslator
         var items =
             new Dictionary<string, Value<IReadOnlyList<MSBuildItem>>>(
                 StringComparer.OrdinalIgnoreCase);
+        var files = new Dictionary<string, Value<FileContents?>>(
+            StringComparer.Ordinal);
         var state = linked.GetStateAfter(
             createdDefinitions[projectInstance.Targets[targetName]]);
 
@@ -396,6 +431,11 @@ public sealed class MSBuildProjectTranslator
             valueSymbols.Add(state[location], $"@({name})");
         }
 
+        foreach (var (path, location) in fileLocations)
+        {
+            files.Add(path, (Value<FileContents?>)state[location]);
+        }
+
         return new TranslationResult(
             definition,
             linked.Program,
@@ -403,6 +443,7 @@ public sealed class MSBuildProjectTranslator
             targets,
             properties,
             items,
+            files,
             valueSymbols.Build(),
             targetConditions,
             warnings);
@@ -411,6 +452,55 @@ public sealed class MSBuildProjectTranslator
         {
             warnings.Add(warning);
             reportWarning?.Invoke(warning);
+        }
+
+        string ResolveStaticFilePath(
+            string expression,
+            string sourceFile)
+        {
+            if (s_itemReference.IsMatch(expression) ||
+                s_itemMetadataReference.IsMatch(expression) ||
+                s_escapeSequence.IsMatch(expression) ||
+                expression.IndexOfAny(['*', '?']) >= 0)
+            {
+                throw Unsupported(
+                    $"file path '{expression}'; file paths must be concrete " +
+                    "during graph construction");
+            }
+
+            var references = FindPropertyReferences(expression);
+            var result = expression;
+
+            foreach (var reference in references.Reverse())
+            {
+                if (reference.Content.Contains('(') ||
+                    reference.Content.Contains(')') ||
+                    reference.Content.Contains("::", StringComparison.Ordinal) ||
+                    targetPropertyAssignments.ContainsKey(reference.Content))
+                {
+                    throw Unsupported(
+                        $"file path '{expression}'; property " +
+                        $"'$({reference.Content})' must be fixed during " +
+                        "graph construction");
+                }
+
+                result = result.Remove(reference.Index, reference.Length)
+                    .Insert(
+                        reference.Index,
+                        projectInstance.GetPropertyValue(reference.Content));
+            }
+
+            if (ContainsReference(result))
+            {
+                throw Unsupported(
+                    $"file path '{expression}'; file paths must be concrete " +
+                    "during graph construction");
+            }
+
+            var baseDirectory = Path.GetDirectoryName(sourceFile)
+                ?? Path.GetDirectoryName(Path.GetFullPath(projectPath))
+                ?? Environment.CurrentDirectory;
+            return Path.GetFullPath(result, baseDirectory);
         }
 
         string GetTargetName(TargetDefinition definition)
@@ -528,7 +618,9 @@ public sealed class MSBuildProjectTranslator
             missingDependencies);
     }
 
-    private static TargetStateAccess GetTargetStateAccess(MSBuildTarget target)
+    private static TargetStateAccess GetTargetStateAccess(
+        MSBuildTarget target,
+        Func<string, string, string> resolveStaticFilePath)
     {
         var readProperties = new HashSet<string>(
             StringComparer.OrdinalIgnoreCase);
@@ -538,10 +630,11 @@ public sealed class MSBuildProjectTranslator
             StringComparer.OrdinalIgnoreCase);
         var writeItems = new HashSet<string>(
             StringComparer.OrdinalIgnoreCase);
+        var readFiles = new HashSet<string>(StringComparer.Ordinal);
 
         if (!string.IsNullOrWhiteSpace(target.Condition))
         {
-            AddConditionRead(target.Condition);
+            AddConditionRead(target.Condition, target.Location.File);
         }
 
         foreach (var child in target.Children)
@@ -551,7 +644,9 @@ public sealed class MSBuildProjectTranslator
                 case ProjectPropertyGroupTaskInstance propertyGroup:
                     if (!string.IsNullOrWhiteSpace(propertyGroup.Condition))
                     {
-                        AddConditionRead(propertyGroup.Condition);
+                        AddConditionRead(
+                            propertyGroup.Condition,
+                            propertyGroup.Location.File);
                     }
 
                     foreach (var property in propertyGroup.Properties)
@@ -566,7 +661,9 @@ public sealed class MSBuildProjectTranslator
 
                         if (!string.IsNullOrWhiteSpace(property.Condition))
                         {
-                            AddConditionRead(property.Condition);
+                            AddConditionRead(
+                                property.Condition,
+                                property.Location.File);
                         }
 
                         writeProperties.Add(property.Name);
@@ -577,7 +674,9 @@ public sealed class MSBuildProjectTranslator
                 case ProjectItemGroupTaskInstance itemGroup:
                     if (!string.IsNullOrWhiteSpace(itemGroup.Condition))
                     {
-                        AddConditionRead(itemGroup.Condition);
+                        AddConditionRead(
+                            itemGroup.Condition,
+                            itemGroup.Location.File);
                     }
 
                     foreach (var item in itemGroup.Items)
@@ -588,7 +687,9 @@ public sealed class MSBuildProjectTranslator
 
                         if (!string.IsNullOrWhiteSpace(item.Condition))
                         {
-                            AddConditionRead(item.Condition);
+                            AddConditionRead(
+                                item.Condition,
+                                item.Location.File);
                         }
 
                         writeItems.Add(item.ItemType);
@@ -599,7 +700,7 @@ public sealed class MSBuildProjectTranslator
                 case ProjectTaskInstance task:
                     if (!string.IsNullOrWhiteSpace(task.Condition))
                     {
-                        AddConditionRead(task.Condition);
+                        AddConditionRead(task.Condition, task.Location.File);
                     }
 
                     if (task.Name.Equals(
@@ -647,7 +748,8 @@ public sealed class MSBuildProjectTranslator
             readProperties,
             writeProperties,
             readItems,
-            writeItems);
+            writeItems,
+            readFiles);
 
         void AddPropertyExpressionRead(string expression)
         {
@@ -675,7 +777,7 @@ public sealed class MSBuildProjectTranslator
             AddPropertyExpressionRead(expression);
         }
 
-        void AddConditionRead(string expression)
+        void AddConditionRead(string expression, string sourceFile)
         {
             var match = s_comparisonCondition.Match(expression);
 
@@ -689,8 +791,8 @@ public sealed class MSBuildProjectTranslator
 
             if (disjunction.Success)
             {
-                AddConditionRead(disjunction.Groups["left"].Value);
-                AddConditionRead(disjunction.Groups["right"].Value);
+                AddConditionRead(disjunction.Groups["left"].Value, sourceFile);
+                AddConditionRead(disjunction.Groups["right"].Value, sourceFile);
                 return;
             }
 
@@ -698,8 +800,27 @@ public sealed class MSBuildProjectTranslator
 
             if (conjunction.Success)
             {
-                AddConditionRead(conjunction.Groups["left"].Value);
-                AddConditionRead(conjunction.Groups["right"].Value);
+                AddConditionRead(conjunction.Groups["left"].Value, sourceFile);
+                AddConditionRead(conjunction.Groups["right"].Value, sourceFile);
+                return;
+            }
+
+            var negation = s_notCondition.Match(expression);
+
+            if (negation.Success)
+            {
+                AddConditionRead(negation.Groups["operand"].Value, sourceFile);
+                return;
+            }
+
+            var exists = s_existsCondition.Match(expression);
+
+            if (exists.Success)
+            {
+                readFiles.Add(
+                    resolveStaticFilePath(
+                        exists.Groups["path"].Value,
+                        sourceFile));
                 return;
             }
 
@@ -966,7 +1087,9 @@ public sealed class MSBuildProjectTranslator
             }
 
             var previousValue = context.GetProperty(property.Name);
-            var condition = context.TranslateCondition(property.Condition);
+            var condition = context.TranslateCondition(
+                property.Condition,
+                property.Location.File);
             var inputs = new List<Value<string>> { previousValue };
             var whenTrueInputs = new List<Value<string>>
             {
@@ -1061,7 +1184,9 @@ public sealed class MSBuildProjectTranslator
                 "property references inside a conditioned PropertyGroup");
         }
 
-        var condition = context.TranslateCondition(propertyGroup.Condition);
+        var condition = context.TranslateCondition(
+            propertyGroup.Condition,
+            propertyGroup.Location.File);
         var inputs = new List<Value>();
         var whenTrueInputs = new List<Value>();
         var whenFalseInputs = new List<Value>();
@@ -1215,7 +1340,9 @@ public sealed class MSBuildProjectTranslator
                     $"condition on item operation {FormatItemOperation(item)}");
             }
 
-            var condition = context.TranslateCondition(item.Condition);
+            var condition = context.TranslateCondition(
+                item.Condition,
+                item.Location.File);
             var whenTrue = context.CreateBranch();
             var whenFalse = context.CreateBranch();
             var whenTrueItems = TranslateItemInclude(
@@ -1499,7 +1626,9 @@ public sealed class MSBuildProjectTranslator
             return;
         }
 
-        var condition = context.TranslateCondition(task.Condition);
+        var condition = context.TranslateCondition(
+            task.Condition,
+            task.Location.File);
         var whenTrue = context.CreateBranch();
         var whenFalse = context.CreateBranch();
 
@@ -1782,7 +1911,8 @@ public sealed class MSBuildProjectTranslator
         IReadOnlySet<string> ReadProperties,
         IReadOnlySet<string> WriteProperties,
         IReadOnlySet<string> ReadItems,
-        IReadOnlySet<string> WriteItems);
+        IReadOnlySet<string> WriteItems,
+        IReadOnlySet<string> ReadFiles);
 
     private static MSBuildItem CreateItem(ProjectItemInstance item) =>
         new(
@@ -1803,7 +1933,9 @@ public sealed class MSBuildProjectTranslator
         public TranslationContext(
             IReadOnlyDictionary<string, Value<string>> properties,
             IReadOnlyDictionary<string, Value<IReadOnlyList<MSBuildItem>>> items,
+            IReadOnlyDictionary<string, Value<FileContents?>> files,
             ValueSymbolTableBuilder valueSymbols,
+            Func<string, string, string> resolveStaticFilePath,
             Action<string>? reportWarning = null)
         {
             Properties = new Dictionary<string, Value<string>>(
@@ -1813,7 +1945,11 @@ public sealed class MSBuildProjectTranslator
                 new Dictionary<string, Value<IReadOnlyList<MSBuildItem>>>(
                     items,
                     StringComparer.OrdinalIgnoreCase);
+            Files = new Dictionary<string, Value<FileContents?>>(
+                files,
+                StringComparer.Ordinal);
             ValueSymbols = valueSymbols;
+            ResolveStaticFilePath = resolveStaticFilePath;
             ReportWarning = reportWarning;
         }
 
@@ -1824,7 +1960,11 @@ public sealed class MSBuildProjectTranslator
             get;
         }
 
+        public Dictionary<string, Value<FileContents?>> Files { get; }
+
         private ValueSymbolTableBuilder ValueSymbols { get; }
+
+        private Func<string, string, string> ResolveStaticFilePath { get; }
 
         private Action<string>? ReportWarning { get; }
 
@@ -1874,6 +2014,8 @@ public sealed class MSBuildProjectTranslator
             var items =
                 new Dictionary<string, Value<IReadOnlyList<MSBuildItem>>>(
                     StringComparer.OrdinalIgnoreCase);
+            var files = new Dictionary<string, Value<FileContents?>>(
+                StringComparer.Ordinal);
 
             foreach (var (name, value) in Properties)
             {
@@ -1893,10 +2035,20 @@ public sealed class MSBuildProjectTranslator
                 CopySymbols(value, parameter);
             }
 
+            foreach (var (path, value) in Files)
+            {
+                var parameter = new Value<FileContents?>();
+                arguments.Add(value);
+                parameters.Add(parameter);
+                files.Add(path, parameter);
+            }
+
             var context = new TranslationContext(
                 properties,
                 items,
+                files,
                 ValueSymbols,
+                ResolveStaticFilePath,
                 ReportWarning);
 
             if (TargetGuard is not null)
@@ -1943,7 +2095,9 @@ public sealed class MSBuildProjectTranslator
             return guard.Result;
         }
 
-        public Value<bool> TranslateCondition(string expression)
+        public Value<bool> TranslateCondition(
+            string expression,
+            string sourceFile)
         {
             var match = s_comparisonCondition.Match(expression);
 
@@ -1976,9 +2130,11 @@ public sealed class MSBuildProjectTranslator
             if (disjunction.Success)
             {
                 var left = TranslateCondition(
-                    disjunction.Groups["left"].Value);
+                    disjunction.Groups["left"].Value,
+                    sourceFile);
                 var right = TranslateCondition(
-                    disjunction.Groups["right"].Value);
+                    disjunction.Groups["right"].Value,
+                    sourceFile);
                 var or = new OrOperation(left, right);
                 AddOperation(or);
                 return or.Result;
@@ -1989,12 +2145,39 @@ public sealed class MSBuildProjectTranslator
             if (conjunction.Success)
             {
                 var left = TranslateCondition(
-                    conjunction.Groups["left"].Value);
+                    conjunction.Groups["left"].Value,
+                    sourceFile);
                 var right = TranslateCondition(
-                    conjunction.Groups["right"].Value);
+                    conjunction.Groups["right"].Value,
+                    sourceFile);
                 var and = new AndOperation(left, right);
                 AddOperation(and);
                 return and.Result;
+            }
+
+            var negation = s_notCondition.Match(expression);
+
+            if (negation.Success)
+            {
+                var operand = TranslateCondition(
+                    negation.Groups["operand"].Value,
+                    sourceFile);
+                var not = new NotOperation(operand);
+                AddOperation(not);
+                return not.Result;
+            }
+
+            match = s_existsCondition.Match(expression);
+
+            if (match.Success)
+            {
+                var path = ResolveStaticFilePath(
+                    match.Groups["path"].Value,
+                    sourceFile);
+                var exists = new FileExistsOperation(
+                    GetFileContents(path));
+                AddOperation(exists);
+                return exists.Result;
             }
 
             match = s_itemIdentityCondition.Match(expression);
@@ -2033,6 +2216,12 @@ public sealed class MSBuildProjectTranslator
 
             throw Unsupported($"target condition '{expression}'");
         }
+
+        private Value<FileContents?> GetFileContents(string path) =>
+            Files.TryGetValue(path, out var contents)
+                ? contents
+                : throw new InvalidOperationException(
+                    $"File state '{path}' was not discovered during analysis.");
 
         public Value<string> ResolvePropertyExpression(string expression)
         {

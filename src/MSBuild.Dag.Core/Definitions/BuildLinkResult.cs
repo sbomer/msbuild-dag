@@ -9,7 +9,8 @@ public sealed partial class BuildLinkResult
         BuildProgram program,
         IReadOnlyDictionary<TargetDefinition, Target> targets,
         BuildDefinition definition,
-        IReadOnlyDictionary<Location, Value> initialValues)
+        IReadOnlyDictionary<Location, Value> initialValues,
+        IReadOnlyDictionary<Location, Value> inputs)
     {
         Program = program;
         Targets = targets;
@@ -22,6 +23,13 @@ public sealed partial class BuildLinkResult
                 new Dictionary<Location, Value>(
                     initialValues,
                     ReferenceEqualityComparer.Instance));
+        Inputs =
+            new System.Collections.ObjectModel.ReadOnlyDictionary<
+                Location,
+                Value>(
+                new Dictionary<Location, Value>(
+                    inputs,
+                    ReferenceEqualityComparer.Instance));
     }
 
     public BuildProgram Program { get; }
@@ -29,4 +37,6 @@ public sealed partial class BuildLinkResult
     public IReadOnlyDictionary<TargetDefinition, Target> Targets { get; }
 
     public IReadOnlyDictionary<Location, Value> InitialValues { get; }
+
+    public IReadOnlyDictionary<Location, Value> Inputs { get; }
 }

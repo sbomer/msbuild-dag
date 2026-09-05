@@ -1,0 +1,10 @@
+<Project>
+  <Target Name="Build">
+    <PropertyGroup>
+      <CheckedPath>DynamicExistsCondition.proj</CheckedPath>
+    </PropertyGroup>
+    <Message
+      Text="exists"
+      Condition="Exists('$(CheckedPath)')" />
+  </Target>
+</Project>

@@ -1,0 +1,10 @@
+<Project>
+  <Target Name="Build">
+    <Message
+      Text="exists"
+      Condition="Exists('ExistsCondition.proj')" />
+    <Error
+      Text="The project file should exist."
+      Condition="!Exists('ExistsCondition.proj')" />
+  </Target>
+</Project>

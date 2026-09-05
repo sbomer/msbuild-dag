@@ -50,6 +50,16 @@ internal static class CliRunner
                 value => GetValueLabel(value, result.ValueSymbols));
 
             var values = new ValueStore();
+
+            foreach (var (path, state) in result.Files)
+            {
+                values.Set(
+                    state,
+                    File.Exists(path) || Directory.Exists(path)
+                        ? new FileContents()
+                        : null);
+            }
+
             var executor = new BuildProgramExecutor(
                 result.Program,
                 values,
@@ -220,6 +230,11 @@ internal static class CliRunner
         if (operation is ErrorOperation)
         {
             return "error";
+        }
+
+        if (operation is FileExistsOperation)
+        {
+            return "exists";
         }
 
         if (!operation.GetType().IsGenericType)

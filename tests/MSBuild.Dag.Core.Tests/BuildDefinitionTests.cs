@@ -115,6 +115,39 @@ public sealed class BuildDefinitionTests
     }
 
     [Fact]
+    public void LinksTargetInputToBuildInputWithoutBakingContent()
+    {
+        var location = new Location<string>();
+        var read = new TargetInput<string>(location);
+        var result = new Value<string>();
+        var target = new TargetDefinition(
+            [],
+            [read],
+            [new TargetOutput(result)],
+            new OperationGraph(
+            [
+                new TestOperation([read.Value], [result]),
+            ]),
+            []);
+
+        var linked = new BuildDefinition(
+            new EvaluationSnapshot(
+                new Dictionary<Location, object?>()),
+            [location],
+            [target])
+            .Link();
+        var linkedTarget = linked.Targets[target];
+        var input = linked.Inputs[location];
+
+        Assert.Empty(linked.Program.InitialValues);
+        Assert.Equal([input], linked.Program.Inputs);
+        Assert.Equal([input], linkedTarget.Inputs);
+        Assert.Same(
+            input,
+            linked.GetStateAfter(target)[location]);
+    }
+
+    [Fact]
     public void RejectsUnorderedStateConflict()
     {
         var location = new Location<string>();

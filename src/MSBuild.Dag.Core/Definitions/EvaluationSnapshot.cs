@@ -14,7 +14,6 @@ public sealed class EvaluationSnapshot
         {
             ArgumentNullException.ThrowIfNull(location);
             location.ValidateContent(content);
-
             copiedValues.Add(location, content);
         }
 

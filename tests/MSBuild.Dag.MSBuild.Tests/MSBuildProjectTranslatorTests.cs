@@ -150,8 +150,9 @@ public sealed class MSBuildProjectTranslatorTests
         var exception = Assert.Throws<NotSupportedException>(
             () => new MSBuildProjectTranslator().Translate(projectPath, "Build"));
 
-        Assert.Contains("target condition", exception.Message);
+        Assert.Contains("file path", exception.Message);
         Assert.DoesNotContain("task conditions", exception.Message);
+        Assert.DoesNotContain("target condition", exception.Message);
         Assert.DoesNotContain("orchestration", exception.Message);
     }
 
@@ -1142,6 +1143,56 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Fact]
+    public async Task EvaluatesExistsUsingStaticNormalizedPath()
+    {
+        var result = TranslateAsset("ExistsCondition.proj", "Build");
+        var build = result.Targets["Build"];
+        var exists = build.Body.Operations
+            .OfType<FileExistsOperation>()
+            .ToArray();
+        var messages = new List<string>();
+        var values = new ValueStore();
+
+        foreach (var state in result.Files.Values)
+        {
+            values.Set(state, new FileContents());
+        }
+
+        await new BuildProgramExecutor(
+            result.Program,
+            values,
+            CreateEvaluator(
+                onMessage: (operation, values) =>
+                    messages.Add(values.Get(operation.Text))).EvaluateAsync)
+            .ExecuteAsync(build);
+
+        Assert.Equal(2, exists.Length);
+        var file = Assert.Single(result.Files);
+        Assert.Contains(file.Value, result.Program.Inputs);
+        Assert.All(
+            exists,
+            operation =>
+            {
+                Assert.Same(
+                    file.Value,
+                    GetExternalInput(build, operation.Contents));
+            });
+        Assert.Equal(["exists"], messages);
+    }
+
+    [Fact]
+    public void RejectsFilePathFromTargetAssignedProperty()
+    {
+        var exception = Assert.Throws<NotSupportedException>(
+            () => TranslateAsset("DynamicExistsCondition.proj", "Build"));
+
+        Assert.Contains("file path '$(CheckedPath)'", exception.Message);
+        Assert.Contains(
+            "'$(CheckedPath)' must be fixed during graph construction",
+            exception.Message);
+    }
+
+    [Fact]
     public async Task FalseTargetConditionPreventsTargetBodyExecution()
     {
         var projectPath = Path.Combine(
@@ -1428,6 +1479,14 @@ public sealed class MSBuildProjectTranslatorTests
                         new InvalidOperationException(
                             $"Unsupported property function " +
                             $"'{operation.FunctionName}' was evaluated.")))
+            .Add<FileExistsOperation>(
+                static (operation, values, _) =>
+                {
+                    values.Set(
+                        operation.Result,
+                        values.Get(operation.Contents) is not null);
+                    return ValueTask.CompletedTask;
+                })
             .Add<ProjectItemIdentitiesOperation>(
                 static (operation, values, _) =>
                 {

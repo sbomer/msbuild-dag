@@ -124,6 +124,37 @@ public sealed partial class BuildProgram
         }
     }
 
+    private void ValidateInputs(
+        IReadOnlyDictionary<Operation, Target> operationOwners)
+    {
+        var values = new HashSet<Value>(
+            InitialValues.Keys,
+            ReferenceEqualityComparer.Instance);
+        var operationOutputs = new HashSet<Value>(
+            operationOwners.Keys.SelectMany(operation => operation.Outputs),
+            ReferenceEqualityComparer.Instance);
+
+        foreach (var input in Inputs)
+        {
+            ArgumentNullException.ThrowIfNull(input);
+
+            if (!values.Add(input))
+            {
+                throw new ArgumentException(
+                    "A build input cannot also be initialized or supplied " +
+                    "more than once.",
+                    nameof(Inputs));
+            }
+
+            if (operationOutputs.Contains(input))
+            {
+                throw new ArgumentException(
+                    "A build input cannot also be produced by an operation.",
+                    nameof(Inputs));
+            }
+        }
+    }
+
     private void ValidateTargetReferences()
     {
         var targets = new HashSet<Target>(Targets, ReferenceEqualityComparer.Instance);
