@@ -47,13 +47,13 @@ public sealed partial class BuildLinkResult
                     "The activated target definitions cannot be ordered.");
             }
 
-            foreach (var write in target.Writes)
+            foreach (var output in target.Outputs)
             {
                 var linkedTarget = Targets[target];
                 var outputIndex = IndexOfReference(
                     linkedTarget.Body.Outputs,
-                    write.Value);
-                state[write.Location] = linkedTarget.Outputs[outputIndex];
+                    output.Value);
+                state[output.Location] = linkedTarget.Outputs[outputIndex];
             }
 
             completed.Add(Targets[target]);
@@ -90,7 +90,7 @@ public sealed partial class BuildLinkResult
             }
 
             throw new InvalidOperationException(
-                "A linked state write must be a target body output.");
+                "A linked target output must be a target body output.");
         }
     }
 }

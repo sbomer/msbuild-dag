@@ -25,7 +25,7 @@ public sealed partial class BuildDefinition
         var linkOrder = GetLinkOrder(dependencies);
         var orderPredecessors = GetOrderPredecessors(dependencies);
 
-        ValidateConditionalWrites();
+        ValidateConditionalOutputs();
         ValidateStateOrdering(orderPredecessors);
 
         var linkedBodies = new Dictionary<TargetDefinition, LinkedTargetBody>(
@@ -36,30 +36,30 @@ public sealed partial class BuildDefinition
 
         foreach (var target in linkOrder)
         {
-            var inputs = new List<Value>(target.Reads.Count);
-            var parameters = new List<Value>(target.Reads.Count);
+            var inputs = new List<Value>(target.Inputs.Count);
+            var parameters = new List<Value>(target.Inputs.Count);
 
-            foreach (var read in target.Reads)
+            foreach (var input in target.Inputs)
             {
                 var source = GetReachingValue(
                     target,
-                    read.Location,
+                    input.Location,
                     linkOrder,
                     orderPredecessors,
                     exports);
                 inputs.Add(source);
-                parameters.Add(read.Value);
+                parameters.Add(input.Value);
             }
 
-            var bodyOutputs = new List<Value>(target.Outputs);
+            var bodyOutputs = new List<Value>(target.Results);
 
-            foreach (var write in target.Writes)
+            foreach (var output in target.Outputs)
             {
                 if (!bodyOutputs.Contains(
-                    write.Value,
+                    output.Value,
                     ReferenceEqualityComparer.Instance))
                 {
-                    bodyOutputs.Add(write.Value);
+                    bodyOutputs.Add(output.Value);
                 }
             }
 
@@ -270,13 +270,13 @@ public sealed partial class BuildDefinition
         }
     }
 
-    private void ValidateConditionalWrites()
+    private void ValidateConditionalOutputs()
     {
         foreach (var target in Targets)
         {
-            if (target.Writes.Any(write => write.IsConditional))
+            if (target.Outputs.Any(output => output.IsConditional))
             {
-                throw new ConditionalStateWriteException(target);
+                throw new ConditionalTargetOutputException(target);
             }
         }
     }
@@ -301,35 +301,35 @@ public sealed partial class BuildDefinition
                     continue;
                 }
 
-                foreach (var firstWrite in first.Writes)
+                foreach (var firstOutput in first.Outputs)
                 {
-                    if (second.Reads.Any(
-                            read => ReferenceEquals(
-                                read.Location,
-                                firstWrite.Location)) ||
-                        second.Writes.Any(
-                            write => ReferenceEquals(
-                                write.Location,
-                                firstWrite.Location)))
+                    if (second.Inputs.Any(
+                        input => ReferenceEquals(
+                            input.Location,
+                            firstOutput.Location)) ||
+                        second.Outputs.Any(
+                        output => ReferenceEquals(
+                            output.Location,
+                            firstOutput.Location)))
                     {
                         throw new StateConflictException(
                             first,
                             second,
-                            firstWrite.Location);
+                        firstOutput.Location);
                     }
                 }
 
-                foreach (var secondWrite in second.Writes)
+                foreach (var secondOutput in second.Outputs)
                 {
-                    if (first.Reads.Any(
-                        read => ReferenceEquals(
-                            read.Location,
-                            secondWrite.Location)))
+                    if (first.Inputs.Any(
+                        input => ReferenceEquals(
+                            input.Location,
+                            secondOutput.Location)))
                     {
                         throw new StateConflictException(
                             first,
                             second,
-                            secondWrite.Location);
+                        secondOutput.Location);
                     }
                 }
             }
@@ -346,7 +346,7 @@ public sealed partial class BuildDefinition
             TargetDefinition,
             IReadOnlyDictionary<Value, Value>> exports)
     {
-        TargetDefinition? writer = null;
+        TargetDefinition? producer = null;
 
         foreach (var candidate in linkOrder)
         {
@@ -356,22 +356,22 @@ public sealed partial class BuildDefinition
             }
 
             if (orderPredecessors[target].Contains(candidate) &&
-                candidate.Writes.Any(
-                    write => ReferenceEquals(write.Location, location)))
+                candidate.Outputs.Any(
+                    output => ReferenceEquals(output.Location, location)))
             {
-                writer = candidate;
+                producer = candidate;
             }
         }
 
-        if (writer is not null)
+        if (producer is not null)
         {
-            var bodyValue = writer.Writes.Single(
-                write => ReferenceEquals(write.Location, location)).Value;
-            return exports[writer][bodyValue];
+            var bodyValue = producer.Outputs.Single(
+                output => ReferenceEquals(output.Location, location)).Value;
+            return exports[producer][bodyValue];
         }
 
         return Evaluation.GetInitialization(location)?.InitialValue.Value ??
-            throw new MissingInitialStateException(target, location);
+            throw new MissingTargetInputException(target, location);
     }
 
 }

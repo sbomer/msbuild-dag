@@ -217,7 +217,7 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Fact]
-    public void LinksPropertyCopyThroughStateRead()
+    public void LinksPropertyCopyThroughTargetInput()
     {
         var result = TranslateAsset("PropertyCopy.proj", "Build");
         var prepare = result.Targets["Prepare"];
@@ -260,8 +260,8 @@ public sealed class MSBuildProjectTranslatorTests
             result.Definition.Evaluation.Initializations.Single(
                 initialization => ReferenceEquals(
                     initialization.Location,
-                    result.TargetDefinitions["Build"].Reads
-                        .OfType<StateRead<string>>()
+                    result.TargetDefinitions["Build"].Inputs
+                        .OfType<TargetInput<string>>()
                         .Single().Location)).InitialValue.Value,
             GetExternalInput(build, expansion.Source));
         Assert.Equal(
@@ -309,13 +309,13 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Fact]
-    public void RejectsConditionalStateWritesUntilMergesAreModeled()
+    public void RejectsConditionalTargetOutputsUntilMergesAreModeled()
     {
         var exception = Assert.Throws<NotSupportedException>(
-            () => TranslateAsset("ConditionalStateWrite.proj", "Build"));
+            () => TranslateAsset("ConditionalTargetOutput.proj", "Build"));
 
         Assert.Contains(
-            "state writes in conditional target 'MaybePrepare'",
+            "outputs in conditional target 'MaybePrepare'",
             exception.Message);
     }
 
@@ -1036,7 +1036,7 @@ public sealed class MSBuildProjectTranslatorTests
             result.Definition.Evaluation.Initializations.Single(
                 initialization => ReferenceEquals(
                     initialization.Location,
-                    result.TargetDefinitions["Build"].Reads
+                    result.TargetDefinitions["Build"].Inputs
                         .Single().Location)).InitialValue.Value,
             GetExternalInput(build, first.Text));
         Assert.Equal("High", importance.Content);

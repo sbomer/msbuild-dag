@@ -4,23 +4,23 @@ public sealed partial class TargetDefinition
 {
     public TargetDefinition(
         IReadOnlyList<TargetDefinition> prelude,
-        IReadOnlyList<StateRead> reads,
-        IReadOnlyList<StateWrite> writes,
-        IReadOnlyList<Value> outputs,
+        IReadOnlyList<TargetInput> inputs,
+        IReadOnlyList<TargetOutput> outputs,
+        IReadOnlyList<Value> results,
         OperationGraph body,
         IReadOnlyList<TargetDefinition> epilogue)
     {
         ArgumentNullException.ThrowIfNull(prelude);
-        ArgumentNullException.ThrowIfNull(reads);
-        ArgumentNullException.ThrowIfNull(writes);
         ArgumentNullException.ThrowIfNull(outputs);
+        ArgumentNullException.ThrowIfNull(inputs);
+        ArgumentNullException.ThrowIfNull(results);
         ArgumentNullException.ThrowIfNull(body);
         ArgumentNullException.ThrowIfNull(epilogue);
 
         Prelude = prelude.ToArray();
-        Reads = reads.ToArray();
-        Writes = writes.ToArray();
+        Inputs = inputs.ToArray();
         Outputs = outputs.ToArray();
+        Results = results.ToArray();
         Body = body;
         Epilogue = epilogue.ToArray();
 
@@ -29,11 +29,11 @@ public sealed partial class TargetDefinition
 
     public IReadOnlyList<TargetDefinition> Prelude { get; }
 
-    public IReadOnlyList<StateRead> Reads { get; }
+    public IReadOnlyList<TargetInput> Inputs { get; }
 
-    public IReadOnlyList<StateWrite> Writes { get; }
+    public IReadOnlyList<TargetOutput> Outputs { get; }
 
-    public IReadOnlyList<Value> Outputs { get; }
+    public IReadOnlyList<Value> Results { get; }
 
     public OperationGraph Body { get; }
 

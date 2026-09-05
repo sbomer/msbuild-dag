@@ -3,7 +3,7 @@ namespace MSBuild.Dag.Core.Tests;
 public sealed class BuildDefinitionTests
 {
     [Fact]
-    public void LinksStateReadToLatestOrderedWrite()
+    public void LinksTargetInputToLatestOrderedOutput()
     {
         var location = new StateLocation<string>();
         var writtenValue = new Value<string>();
@@ -11,11 +11,11 @@ public sealed class BuildDefinitionTests
         var writer = new TargetDefinition(
             [],
             [],
-            [new StateWrite<string>(location, writtenValue)],
+            [new TargetOutput<string>(location, writtenValue)],
             [],
             new OperationGraph([writeOperation]),
             []);
-        var read = new StateRead<string>(location);
+        var read = new TargetInput<string>(location);
         var result = new Value<string>();
         var readOperation = new TestOperation([read.Value], [result]);
         var reader = new TargetDefinition(
@@ -49,13 +49,13 @@ public sealed class BuildDefinitionTests
     }
 
     [Fact]
-    public void LinksStateReadToEvaluationValueWithoutWriter()
+    public void LinksTargetInputToEvaluationValueWithoutOutput()
     {
         var location = new StateLocation<string>();
         var initialization = new StateInitialization<string>(
             location,
             "initial");
-        var read = new StateRead<string>(location);
+        var read = new TargetInput<string>(location);
         var result = new Value<string>();
         var target = new TargetDefinition(
             [],
@@ -93,14 +93,14 @@ public sealed class BuildDefinitionTests
         var writer = new TargetDefinition(
             [],
             [],
-            [new StateWrite<string>(location, writtenValue)],
+            [new TargetOutput<string>(location, writtenValue)],
             [],
             new OperationGraph(
             [
                 new TestOperation([], [writtenValue]),
             ]),
             []);
-        var read = new StateRead<string>(location);
+        var read = new TargetInput<string>(location);
         var reader = new TargetDefinition(
             [],
             [read],
@@ -127,7 +127,7 @@ public sealed class BuildDefinitionTests
     }
 
     [Fact]
-    public void RejectsConditionalStateWrite()
+    public void RejectsConditionalTargetOutput()
     {
         var location = new StateLocation<string>();
         var value = new Value<string>();
@@ -135,7 +135,7 @@ public sealed class BuildDefinitionTests
             [],
             [],
             [
-                new StateWrite<string>(location, value)
+                new TargetOutput<string>(location, value)
                 {
                     IsConditional = true,
                 },
@@ -147,7 +147,7 @@ public sealed class BuildDefinitionTests
             ]),
             []);
 
-        var exception = Assert.Throws<ConditionalStateWriteException>(
+        var exception = Assert.Throws<ConditionalTargetOutputException>(
             () => new BuildDefinition(
                 new EvaluationSnapshot(
                 [

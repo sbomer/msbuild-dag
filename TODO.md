@@ -5,6 +5,28 @@ mechanism, but every accepted construct should preserve its observable
 semantics. If equivalence cannot be established, translation should fail with a
 specific diagnostic rather than silently approximate the behavior.
 
+## Highest priority
+
+### Eliminate linked-target boundary aliases
+
+Linking currently creates distinct external target input/output values and
+copies concrete contents across the target boundary. The input copies are
+necessary only because operations in an immutable target body still reference
+their original target-local input values after linking.
+
+- Add immutable SSA value substitution when linking a `TargetDefinition`.
+- Rewrite every operation operand, including operands in nested conditional
+  regions, from each target-local input to its reaching linked value.
+- Export body-produced output values directly instead of creating sibling
+  output aliases.
+- Make linked `Target.Inputs` and `Target.Outputs` use the same `Value<T>`
+  instances consumed and produced by the linked body.
+- Preserve independent target caching: a cache hit supplies the target's
+  output values directly and skips its body.
+- Remove executor boundary copies after substitution is complete.
+- Add structural tests proving cross-target consumers reference producer
+  values directly and execution/cache behavior remains correct.
+
 ## Confirmed silent divergences
 
 ### Built-in item metadata

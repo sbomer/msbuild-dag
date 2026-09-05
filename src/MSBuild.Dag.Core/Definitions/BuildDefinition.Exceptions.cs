@@ -22,19 +22,19 @@ public sealed class TargetOrderCycleException(
     public IReadOnlyList<TargetDefinition> Cycle { get; } = cycle.ToArray();
 }
 
-public sealed class ConditionalStateWriteException(
+public sealed class ConditionalTargetOutputException(
     TargetDefinition target)
     : NotSupportedException(
-        "Conditional target state writes require state merging.")
+        "Conditional target outputs require state merging.")
 {
     public TargetDefinition Target { get; } = target;
 }
 
-public sealed class MissingInitialStateException(
+public sealed class MissingTargetInputException(
     TargetDefinition target,
     StateLocation location)
     : InvalidOperationException(
-        "A state read has no preceding write or evaluation-time value.")
+        "A target input has no preceding output or evaluation-time value.")
 {
     public TargetDefinition Target { get; } = target;
 

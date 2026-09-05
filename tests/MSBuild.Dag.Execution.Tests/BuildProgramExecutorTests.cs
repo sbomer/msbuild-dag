@@ -369,10 +369,10 @@ public sealed class BuildProgramExecutorTests
     }
 
     [Fact]
-    public async Task ExecutesStateReadBoundToEvaluationSnapshot()
+    public async Task ExecutesTargetInputBoundToEvaluationSnapshot()
     {
         var location = new StateLocation<int>();
-        var read = new StateRead<int>(location);
+        var read = new TargetInput<int>(location);
         var operation = new UnaryOperation(read.Value);
         var definition = new TargetDefinition(
             [],

@@ -4,45 +4,46 @@ public sealed partial class TargetDefinition
 {
     private void Validate()
     {
-        var reads = new HashSet<StateLocation>(
+        var inputLocations = new HashSet<StateLocation>(
             ReferenceEqualityComparer.Instance);
-        var readValues = new HashSet<Value>(
+        var inputValues = new HashSet<Value>(
             ReferenceEqualityComparer.Instance);
 
-        foreach (var read in Reads)
+        foreach (var input in Inputs)
         {
-            ArgumentNullException.ThrowIfNull(read);
+            ArgumentNullException.ThrowIfNull(input);
 
-            if (!reads.Add(read.Location))
+            if (!inputLocations.Add(input.Location))
             {
                 throw new ArgumentException(
-                    "A target cannot read the same state location more than once.",
-                    nameof(Reads));
+                    "A target cannot bind the same input location more than once.",
+                    nameof(Inputs));
             }
 
-            readValues.Add(read.Value);
+            inputValues.Add(input.Value);
         }
 
-        var writes = new HashSet<StateLocation>(
+        var outputLocations = new HashSet<StateLocation>(
             ReferenceEqualityComparer.Instance);
 
-        foreach (var write in Writes)
+        foreach (var output in Outputs)
         {
-            ArgumentNullException.ThrowIfNull(write);
+            ArgumentNullException.ThrowIfNull(output);
 
-            if (!writes.Add(write.Location))
+            if (!outputLocations.Add(output.Location))
             {
                 throw new ArgumentException(
-                    "A target cannot write the same state location more than once.",
-                    nameof(Writes));
+                    "A target cannot bind the same output location more than once.",
+                    nameof(Outputs));
             }
 
-            if (Body.GetProducer(write.Value) is null &&
-                !readValues.Contains(write.Value))
+            if (Body.GetProducer(output.Value) is null &&
+                !inputValues.Contains(output.Value))
             {
                 throw new ArgumentException(
-                    "A state write must be produced by the target body or copy a state read.",
-                    nameof(Writes));
+                    "A target output must be produced by the target body or " +
+                    "copy a target input.",
+                    nameof(Outputs));
             }
         }
 
@@ -51,24 +52,25 @@ public sealed partial class TargetDefinition
             foreach (var input in operation.Inputs)
             {
                 if (Body.GetProducer(input) is null &&
-                    !readValues.Contains(input))
+                    !inputValues.Contains(input))
                 {
                     throw new ArgumentException(
-                        "Every external target-definition input must be a state read.",
-                        nameof(Reads));
+                        "Every external target-definition value must be a " +
+                        "declared target input.",
+                        nameof(Inputs));
                 }
             }
         }
 
-        foreach (var output in Outputs)
+        foreach (var result in Results)
         {
-            ArgumentNullException.ThrowIfNull(output);
+            ArgumentNullException.ThrowIfNull(result);
 
-            if (Body.GetProducer(output) is null)
+            if (Body.GetProducer(result) is null)
             {
                 throw new ArgumentException(
-                    "A target-definition output must be produced by its body.",
-                    nameof(Outputs));
+                    "A target-definition result must be produced by its body.",
+                    nameof(Results));
             }
         }
     }

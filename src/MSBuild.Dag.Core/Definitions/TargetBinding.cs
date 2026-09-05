@@ -1,21 +1,21 @@
 namespace MSBuild.Dag.Core;
 
-public abstract partial class StateRead
+public abstract partial class TargetInput
 {
     public abstract StateLocation Location { get; }
 
     public abstract Value Value { get; }
 }
 
-public sealed partial class StateRead<T>(
-    StateLocation<T> location) : StateRead
+public sealed partial class TargetInput<T>(
+    StateLocation<T> location) : TargetInput
 {
     public override StateLocation<T> Location { get; } = location;
 
     public override Value<T> Value { get; } = new();
 }
 
-public abstract class StateWrite
+public abstract class TargetOutput
 {
     public abstract StateLocation Location { get; }
 
@@ -24,9 +24,9 @@ public abstract class StateWrite
     public bool IsConditional { get; init; }
 }
 
-public sealed class StateWrite<T>(
+public sealed class TargetOutput<T>(
     StateLocation<T> location,
-    Value<T> value) : StateWrite
+    Value<T> value) : TargetOutput
 {
     public override StateLocation<T> Location { get; } = location;
 

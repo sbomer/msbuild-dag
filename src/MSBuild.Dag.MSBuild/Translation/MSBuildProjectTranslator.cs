@@ -154,11 +154,11 @@ public sealed class MSBuildProjectTranslator
             var access = stateAccesses[target];
             var propertyReads = access.ReadProperties.ToDictionary(
                 name => name,
-                name => new StateRead<string>(propertyLocations[name]),
+                name => new TargetInput<string>(propertyLocations[name]),
                 StringComparer.OrdinalIgnoreCase);
             var itemReads = access.ReadItems.ToDictionary(
                 name => name,
-                name => new StateRead<IReadOnlyList<MSBuildItem>>(
+                name => new TargetInput<IReadOnlyList<MSBuildItem>>(
                     itemLocations[name]),
                 StringComparer.OrdinalIgnoreCase);
             var context = new TranslationContext(
@@ -230,12 +230,12 @@ public sealed class MSBuildProjectTranslator
             targetBodies.Add(
                 target,
                 new TargetBody(
-                    propertyReads.Values.Cast<StateRead>()
+                    propertyReads.Values.Cast<TargetInput>()
                         .Concat(itemReads.Values)
                         .ToArray(),
                     [
                         .. access.WriteProperties.Select(
-                            name => new StateWrite<string>(
+                            name => new TargetOutput<string>(
                                 propertyLocations[name],
                                 context.Properties[name])
                             {
@@ -243,7 +243,7 @@ public sealed class MSBuildProjectTranslator
                                     !string.IsNullOrWhiteSpace(target.Condition),
                             }),
                         .. access.WriteItems.Select(
-                            name => new StateWrite<IReadOnlyList<MSBuildItem>>(
+                            name => new TargetOutput<IReadOnlyList<MSBuildItem>>(
                                 itemLocations[name],
                                 context.Items[name])
                             {
@@ -269,9 +269,9 @@ public sealed class MSBuildProjectTranslator
                 sourceTarget,
                 new TargetDefinition(
                     [],
-                    body.Reads,
-                    body.Writes,
+                    body.Inputs,
                     body.Outputs,
+                    body.Results,
                     body.Graph,
                     []));
         }
@@ -324,10 +324,10 @@ public sealed class MSBuildProjectTranslator
                 "program.",
                 exception);
         }
-        catch (ConditionalStateWriteException exception)
+        catch (ConditionalTargetOutputException exception)
         {
             throw Unsupported(
-                $"state writes in conditional target " +
+                $"outputs in conditional target " +
                 $"'{GetTargetName(exception.Target)}'");
         }
         catch (TargetOrderCycleException exception)
@@ -1780,9 +1780,9 @@ public sealed class MSBuildProjectTranslator
         new($"The restricted MSBuild translator does not support {construct}.");
 
     private sealed record TargetBody(
-        IReadOnlyList<StateRead> Reads,
-        IReadOnlyList<StateWrite> Writes,
-        IReadOnlyList<Value> Outputs,
+        IReadOnlyList<TargetInput> Inputs,
+        IReadOnlyList<TargetOutput> Outputs,
+        IReadOnlyList<Value> Results,
         OperationGraph Graph);
 
     private sealed record TargetLinks(
