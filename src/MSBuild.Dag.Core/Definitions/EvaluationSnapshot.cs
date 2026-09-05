@@ -1,51 +1,28 @@
 namespace MSBuild.Dag.Core;
 
-public abstract class StateInitialization
+public sealed class EvaluationSnapshot
 {
-    public abstract Location Location { get; }
-
-    public abstract InitialValue InitialValue { get; }
-}
-
-public sealed class StateInitialization<T>(
-    Location<T> location,
-    T content) : StateInitialization
-{
-    private readonly InitialValue<T> _initialValue =
-        new(new Value<T>(), content);
-
-    public override Location<T> Location { get; } = location;
-
-    public override InitialValue<T> InitialValue => _initialValue;
-}
-
-public sealed partial class EvaluationSnapshot
-{
-    private readonly Dictionary<Location, StateInitialization>
-        _initializations =
-            new(ReferenceEqualityComparer.Instance);
-
     public EvaluationSnapshot(
-        IReadOnlyList<StateInitialization> initializations)
+        IReadOnlyDictionary<Location, object?> values)
     {
-        ArgumentNullException.ThrowIfNull(initializations);
+        ArgumentNullException.ThrowIfNull(values);
 
-        Initializations = initializations.ToArray();
+        var copiedValues = new Dictionary<Location, object?>(
+            ReferenceEqualityComparer.Instance);
 
-        foreach (var initialization in Initializations)
+        foreach (var (location, content) in values)
         {
-            ArgumentNullException.ThrowIfNull(initialization);
+            ArgumentNullException.ThrowIfNull(location);
+            location.ValidateContent(content);
 
-            if (!_initializations.TryAdd(
-                initialization.Location,
-                initialization))
-            {
-                throw new ArgumentException(
-                    "A state location cannot be initialized more than once.",
-                    nameof(initializations));
-            }
+            copiedValues.Add(location, content);
         }
+
+        Values =
+            new System.Collections.ObjectModel.ReadOnlyDictionary<
+                Location,
+                object?>(copiedValues);
     }
 
-    public IReadOnlyList<StateInitialization> Initializations { get; }
+    public IReadOnlyDictionary<Location, object?> Values { get; }
 }

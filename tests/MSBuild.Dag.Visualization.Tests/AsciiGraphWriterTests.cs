@@ -279,7 +279,10 @@ public sealed class AsciiGraphWriterTests
             []);
         var program = new BuildProgram(
             [target],
-            [new InitialValue<string>(initial, "0")]);
+            new Dictionary<Value, object?>
+            {
+                [initial] = "0",
+            });
 
         var result = AsciiGraphWriter.Render(
             program,

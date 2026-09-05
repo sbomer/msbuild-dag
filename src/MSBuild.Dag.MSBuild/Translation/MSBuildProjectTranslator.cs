@@ -112,38 +112,26 @@ public sealed class MSBuildProjectTranslator
             }
         }
 
-        var evaluation = new EvaluationSnapshot(
-        [
-            .. propertyLocations.Select(
-                pair => new StateInitialization<string>(
-                    pair.Value,
-                    projectInstance.GetPropertyValue(pair.Key))),
-            .. itemLocations.Select(
-                pair => new StateInitialization<IReadOnlyList<MSBuildItem>>(
-                    pair.Value,
-                    projectInstance.GetItems(pair.Key)
-                        .Select(CreateItem)
-                        .ToArray())),
-        ]);
+        var evaluatedValues = new Dictionary<Location, object?>(
+            ReferenceEqualityComparer.Instance);
 
-        foreach (var initialization in evaluation.Initializations)
+        foreach (var (name, location) in propertyLocations)
         {
-            var property = propertyLocations.FirstOrDefault(
-                pair => ReferenceEquals(pair.Value, initialization.Location));
-            if (property.Key is not null)
-            {
-                valueSymbols.Add(
-                    initialization.InitialValue.Value,
-                    $"$({property.Key})");
-                continue;
-            }
-
-            var item = itemLocations.First(
-                pair => ReferenceEquals(pair.Value, initialization.Location));
-            valueSymbols.Add(
-                initialization.InitialValue.Value,
-                $"@({item.Key})");
+            evaluatedValues.Add(
+                location,
+                projectInstance.GetPropertyValue(name));
         }
+
+        foreach (var (name, location) in itemLocations)
+        {
+            evaluatedValues.Add(
+                location,
+                projectInstance.GetItems(name)
+                    .Select(CreateItem)
+                    .ToArray());
+        }
+
+        var evaluation = new EvaluationSnapshot(evaluatedValues);
         var targetBodies = new Dictionary<MSBuildTarget, TargetBody>(
             ReferenceEqualityComparer.Instance);
         var targetConditions = new Dictionary<string, Value<bool>>(
@@ -342,6 +330,20 @@ public sealed class MSBuildProjectTranslator
                         target => $"'{GetTargetName(target)}'")) +
                 ".",
                 exception);
+        }
+
+        foreach (var (name, location) in propertyLocations)
+        {
+            valueSymbols.Add(
+                linked.InitialValues[location],
+                $"$({name})");
+        }
+
+        foreach (var (name, location) in itemLocations)
+        {
+            valueSymbols.Add(
+                linked.InitialValues[location],
+                $"@({name})");
         }
 
         var targets = new Dictionary<string, Target>(

@@ -3,6 +3,35 @@ namespace MSBuild.Dag.Core.Tests;
 public sealed class BuildDefinitionTests
 {
     [Fact]
+    public void EvaluationSnapshotMapsLocationsToConcreteValues()
+    {
+        var stringLocation = new Location<string>();
+        var integerLocation = new Location<int>();
+        var snapshot = new EvaluationSnapshot(
+            new Dictionary<Location, object?>
+            {
+                [stringLocation] = "value",
+                [integerLocation] = 42,
+            });
+
+        Assert.Equal("value", snapshot.Values[stringLocation]);
+        Assert.Equal(42, snapshot.Values[integerLocation]);
+    }
+
+    [Fact]
+    public void EvaluationSnapshotRejectsValueOfWrongType()
+    {
+        var location = new Location<string>();
+
+        Assert.Throws<ArgumentException>(
+            () => new EvaluationSnapshot(
+                new Dictionary<Location, object?>
+                {
+                    [location] = 42,
+                }));
+    }
+
+    [Fact]
     public void LinksTargetInputToLatestOrderedOutput()
     {
         var location = new Location<string>();
@@ -26,9 +55,10 @@ public sealed class BuildDefinitionTests
 
         var linked = new BuildDefinition(
             new EvaluationSnapshot(
-            [
-                new StateInitialization<string>(location, "initial"),
-            ]),
+                new Dictionary<Location, object?>
+                {
+                    [location] = "initial",
+                }),
             [reader, writer])
             .Link();
 
@@ -50,9 +80,11 @@ public sealed class BuildDefinitionTests
     public void LinksTargetInputToEvaluationValueWithoutOutput()
     {
         var location = new Location<string>();
-        var initialization = new StateInitialization<string>(
-            location,
-            "initial");
+        var evaluation = new EvaluationSnapshot(
+            new Dictionary<Location, object?>
+            {
+                [location] = "initial",
+            });
         var read = new TargetInput<string>(location);
         var result = new Value<string>();
         var target = new TargetDefinition(
@@ -66,7 +98,7 @@ public sealed class BuildDefinitionTests
             []);
 
         var linked = new BuildDefinition(
-            new EvaluationSnapshot([initialization]),
+            evaluation,
             [target])
             .Link();
 
@@ -75,10 +107,10 @@ public sealed class BuildDefinitionTests
         Assert.Null(linkedTarget.Body.GetProducer(read.Value));
         Assert.Equal([read.Value], linkedTarget.Body.Inputs);
         Assert.Equal(
-            [initialization.InitialValue.Value],
+            [linked.InitialValues[location]],
             linkedTarget.Inputs);
         Assert.Same(
-            initialization.InitialValue.Value,
+            linked.InitialValues[location],
             linked.GetStateAfter(target)[location]);
     }
 
@@ -110,9 +142,10 @@ public sealed class BuildDefinitionTests
         var exception = Assert.Throws<StateConflictException>(
             () => new BuildDefinition(
                 new EvaluationSnapshot(
-                [
-                    new StateInitialization<string>(location, "initial"),
-                ]),
+                    new Dictionary<Location, object?>
+                    {
+                        [location] = "initial",
+                    }),
                 [writer, reader])
                 .Link());
 
@@ -144,9 +177,10 @@ public sealed class BuildDefinitionTests
         var exception = Assert.Throws<ConditionalTargetOutputException>(
             () => new BuildDefinition(
                 new EvaluationSnapshot(
-                [
-                    new StateInitialization<string>(location, "initial"),
-                ]),
+                    new Dictionary<Location, object?>
+                    {
+                        [location] = "initial",
+                    }),
                 [target])
                 .Link());
 

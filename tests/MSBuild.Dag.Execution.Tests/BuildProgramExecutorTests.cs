@@ -382,9 +382,10 @@ public sealed class BuildProgramExecutorTests
             []);
         var linked = new BuildDefinition(
             new EvaluationSnapshot(
-            [
-                new StateInitialization<int>(location, 41),
-            ]),
+                new Dictionary<Location, object?>
+                {
+                    [location] = 41,
+                }),
             [definition])
             .Link();
         var values = new ValueStore();
@@ -421,7 +422,10 @@ public sealed class BuildProgramExecutorTests
             []);
         var program = new BuildProgram(
             [target],
-            [new InitialValue<int>(externalInput, 41)]);
+            new Dictionary<Value, object?>
+            {
+                [externalInput] = 41,
+            });
         var values = new ValueStore();
 
         await new BuildProgramExecutor(

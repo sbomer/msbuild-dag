@@ -17,11 +17,9 @@ public sealed partial class BuildLinkResult
         var state = new Dictionary<Location, Value>(
             ReferenceEqualityComparer.Instance);
 
-        foreach (var initialization in _evaluation.Initializations)
+        foreach (var (location, value) in InitialValues)
         {
-            state.Add(
-                initialization.Location,
-                initialization.InitialValue.Value);
+            state.Add(location, value);
         }
 
         var activated = new HashSet<TargetDefinition>(

@@ -2147,11 +2147,11 @@ public static class AsciiGraphWriter
         var labels = new Dictionary<Value, string>(
             ReferenceEqualityComparer.Instance);
 
-        foreach (var initialValue in program.InitialValues)
+        foreach (var (value, content) in program.InitialValues)
         {
             labels.Add(
-                initialValue.Value,
-                FormatInitialValue(initialValue.Content));
+                value,
+                FormatInitialValue(content));
         }
 
         return value => labels.GetValueOrDefault(value);

@@ -109,24 +109,13 @@ public sealed partial class BuildProgram
     private void ValidateInitialValues(
         IReadOnlyDictionary<Operation, Target> operationOwners)
     {
-        var values = new HashSet<Value>(
-            ReferenceEqualityComparer.Instance);
         var operationOutputs = new HashSet<Value>(
             operationOwners.Keys.SelectMany(operation => operation.Outputs),
             ReferenceEqualityComparer.Instance);
 
-        foreach (var initialValue in InitialValues)
+        foreach (var value in InitialValues.Keys)
         {
-            ArgumentNullException.ThrowIfNull(initialValue);
-
-            if (!values.Add(initialValue.Value))
-            {
-                throw new ArgumentException(
-                    "A value cannot be initialized more than once.",
-                    nameof(InitialValues));
-            }
-
-            if (operationOutputs.Contains(initialValue.Value))
+            if (operationOutputs.Contains(value))
             {
                 throw new ArgumentException(
                     "An initial value cannot also be produced by an operation.",

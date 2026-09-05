@@ -26,9 +26,9 @@ public sealed class BuildProgramExecutor
         _values = values;
         _executeOperation = executeOperation;
 
-        foreach (var initialValue in program.InitialValues)
+        foreach (var (value, content) in program.InitialValues)
         {
-            _values.SetInitial(initialValue);
+            _values.SetInitial(value, content);
         }
     }
 

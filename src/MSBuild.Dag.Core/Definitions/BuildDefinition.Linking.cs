@@ -28,6 +28,20 @@ public sealed partial class BuildDefinition
         ValidateConditionalOutputs();
         ValidateStateOrdering(orderPredecessors);
 
+        var initialValues =
+            new Dictionary<Location, Value>(
+                ReferenceEqualityComparer.Instance);
+        var initialContents =
+            new Dictionary<Value, object?>(
+                ReferenceEqualityComparer.Instance);
+
+        foreach (var (location, content) in Evaluation.Values)
+        {
+            var value = location.CreateValue();
+            initialValues.Add(location, value);
+            initialContents.Add(value, content);
+        }
+
         var linkedBodies = new Dictionary<TargetDefinition, LinkedTargetBody>(
             ReferenceEqualityComparer.Instance);
         var exports =
@@ -46,6 +60,7 @@ public sealed partial class BuildDefinition
                     input.Location,
                     linkOrder,
                     orderPredecessors,
+                    initialValues,
                     exports);
                 inputs.Add(source);
                 parameters.Add(input.Value);
@@ -115,16 +130,15 @@ public sealed partial class BuildDefinition
 
         var program = new BuildProgram(
             Targets.Select(target => linkedTargets[target]).ToArray(),
-            Evaluation.Initializations
-                .Select(initialization => initialization.InitialValue)
-                .ToArray());
+            initialContents);
 
         return new BuildLinkResult(
             program,
             new Dictionary<TargetDefinition, Target>(
                 linkedTargets,
                 ReferenceEqualityComparer.Instance),
-            this);
+            this,
+            initialValues);
     }
 
     private void ValidateReferences(
@@ -346,6 +360,7 @@ public sealed partial class BuildDefinition
         IReadOnlyList<TargetDefinition> linkOrder,
         IReadOnlyDictionary<TargetDefinition, IReadOnlySet<TargetDefinition>>
             orderPredecessors,
+        IReadOnlyDictionary<Location, Value> initialValues,
         IReadOnlyDictionary<
             TargetDefinition,
             IReadOnlyDictionary<Value, Value>> exports)
@@ -374,8 +389,9 @@ public sealed partial class BuildDefinition
             return exports[producer][bodyValue];
         }
 
-        return Evaluation.GetInitialization(location)?.InitialValue.Value ??
-            throw new MissingTargetInputException(target, location);
+        return initialValues.TryGetValue(location, out var initialValue)
+            ? initialValue
+            : throw new MissingTargetInputException(target, location);
     }
 
 }

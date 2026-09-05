@@ -71,11 +71,11 @@ public sealed class ValueStore
         }
     }
 
-    internal void SetInitial(InitialValue initialValue)
+    internal void SetInitial(Value value, object? content)
     {
-        ArgumentNullException.ThrowIfNull(initialValue);
+        ArgumentNullException.ThrowIfNull(value);
 
-        if (!_values.TryAdd(initialValue.Value, initialValue.Content))
+        if (!_values.TryAdd(value, content))
         {
             throw new InvalidOperationException(
                 "An initial value can only be assigned once.");

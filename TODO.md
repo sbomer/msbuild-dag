@@ -169,3 +169,22 @@ ordered list.
   pointwise implicit-task lowering, task batching, or target batching.
 - Prefer a precise unsupported diagnostic whenever equivalence has not been
   demonstrated.
+
+## Lowest-priority future optimization
+
+### Lower projects independently of global properties
+
+The current model lowers an evaluated project instance: a project together
+with a fixed set of global properties. Global properties are therefore known
+before translation and may affect imports, conditions, items, targets, and the
+resulting graph structure.
+
+- Explore lowering a project before its global properties are known.
+- Represent global properties as parameters where they do not affect graph
+  structure.
+- Partially evaluate property-dependent expressions and specialize the graph
+  once the invocation's global properties are available.
+- Preserve project-instance semantics when global properties affect imports or
+  other structural evaluation behavior.
+- Treat this only as a future graph-reuse optimization; do not complicate the
+  current per-project-instance lowering model.

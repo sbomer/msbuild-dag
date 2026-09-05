@@ -256,14 +256,11 @@ public sealed class MSBuildProjectTranslatorTests
                 new StringReplacement("-", ";"),
             ],
             expansion.Replacements);
-        Assert.Same(
-            result.Definition.Evaluation.Initializations.Single(
-                initialization => ReferenceEquals(
-                    initialization.Location,
-                    result.TargetDefinitions["Build"].Inputs
-                        .OfType<TargetInput<string>>()
-                        .Single().Location)).InitialValue.Value,
-            GetExternalInput(build, expansion.Source));
+        Assert.Contains(
+            result.Program.InitialValues,
+            initialValue => ReferenceEquals(
+                initialValue.Key,
+                GetExternalInput(build, expansion.Source)));
         Assert.Equal(
             ["clr", "libs", "native"],
             GetIdentities(values.Get(result.Items["SpecifiedSubsetName"])));
@@ -1032,13 +1029,11 @@ public sealed class MSBuildProjectTranslatorTests
         Assert.Equal(2, messages.Length);
         Assert.IsNotAssignableFrom<IOrderedOperation>(secondText);
         Assert.Same(first.OrderOutput, second.OrderInput);
-        Assert.Same(
-            result.Definition.Evaluation.Initializations.Single(
-                initialization => ReferenceEquals(
-                    initialization.Location,
-                    result.TargetDefinitions["Build"].Inputs
-                        .Single().Location)).InitialValue.Value,
-            GetExternalInput(build, first.Text));
+        Assert.Contains(
+            result.Program.InitialValues,
+            initialValue => ReferenceEquals(
+                initialValue.Key,
+                GetExternalInput(build, first.Text)));
         Assert.Equal("High", importance.Content);
         Assert.Equal("normal", defaultImportance.Content);
         Assert.Equal(

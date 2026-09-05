@@ -125,6 +125,22 @@ public sealed class BuildProgramTests
     }
 
     [Fact]
+    public void RejectsInitialContentWithDifferentType()
+    {
+        var value = new Value<string>();
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => new BuildProgram(
+                [],
+                new Dictionary<Value, object?>
+                {
+                    [value] = 42,
+                }));
+
+        Assert.Contains("System.String", exception.Message);
+    }
+
+    [Fact]
     public void AllowsTargetPassingInputThroughAsDistinctOutput()
     {
         var value = new Value<string>();
