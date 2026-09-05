@@ -1,0 +1,13 @@
+<Project>
+  <PropertyGroup>
+    <RunCallTarget>false</RunCallTarget>
+  </PropertyGroup>
+
+  <Target Name="Called" />
+
+  <Target Name="Build">
+    <CallTarget
+      Targets="Called"
+      Condition="'$(RunCallTarget)' == 'true'" />
+  </Target>
+</Project>

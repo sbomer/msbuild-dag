@@ -815,6 +815,77 @@ public sealed class MSBuildProjectTranslatorTests
         Assert.Equal(["first", "changed"], messages);
     }
 
+    [Fact]
+    public void RealMSBuildCallTargetScopesAndCachesCalledTargetState()
+    {
+        var projectPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "TestAssets",
+            "CallTargetSemantics.proj");
+        using var projectCollection =
+            new Microsoft.Build.Evaluation.ProjectCollection();
+        var project = projectCollection.LoadProject(projectPath);
+        var logger = new MessageLogger();
+
+        var succeeded = project.Build(
+            "Build",
+            [logger]);
+
+        Assert.True(succeeded);
+        Assert.Equal(
+            [
+                "BEFORE P=caller Q=initial I=initial;caller",
+                "CALLED P=called Q=called I=initial;called",
+                "AFTER P=caller Q=initial I=initial;caller",
+                "LATER P=caller Q=called I=initial;called;caller",
+            ],
+            logger.Messages);
+    }
+
+    [Theory]
+    [InlineData("UnsupportedCallTarget.proj", true)]
+    [InlineData("SkippedUnsupportedCallTarget.proj", false)]
+    public async Task DefersCallTargetUntilExecution(
+        string assetName,
+        bool shouldThrow)
+    {
+        var warnings = new List<string>();
+        var projectPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "TestAssets",
+            assetName);
+        var result = new MSBuildProjectTranslator().Translate(
+            projectPath,
+            "Build",
+            warnings.Add);
+        var operation = Assert.Single(
+            result.Targets["Build"].Body.Operations
+                .SelectMany(FlattenOperations)
+                .OfType<UnsupportedTaskOperation>());
+        var execution = new BuildProgramExecutor(
+            result.Program,
+            new ValueStore(),
+            CreateEvaluator().EvaluateAsync)
+            .ExecuteAsync(result.Targets["Build"]);
+
+        Assert.Single(warnings);
+        Assert.Contains("does not support task 'CallTarget'", warnings[0]);
+        Assert.Equal("CallTarget", operation.TaskName);
+
+        if (shouldThrow)
+        {
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                async () => await execution);
+            Assert.Contains(
+                "does not support task 'CallTarget'",
+                exception.Message);
+        }
+        else
+        {
+            await execution;
+        }
+    }
+
     [Theory]
     [InlineData("DynamicMSBuildInvocation.proj", true)]
     [InlineData("SkippedDynamicMSBuildInvocation.proj", false)]
@@ -2166,6 +2237,38 @@ public sealed class MSBuildProjectTranslatorTests
         BuildProgramExecutor Executor)
     {
         public bool InputsInitialized { get; set; }
+    }
+
+    private sealed class MessageLogger :
+        Microsoft.Build.Framework.ILogger
+    {
+        public List<string> Messages { get; } = [];
+
+        public Microsoft.Build.Framework.LoggerVerbosity Verbosity
+        {
+            get;
+            set;
+        } = Microsoft.Build.Framework.LoggerVerbosity.Minimal;
+
+        public string? Parameters { get; set; }
+
+        public void Initialize(
+            Microsoft.Build.Framework.IEventSource eventSource)
+        {
+            eventSource.MessageRaised += (_, args) =>
+            {
+                if (args.Importance ==
+                        Microsoft.Build.Framework.MessageImportance.High &&
+                    args.Message is not null)
+                {
+                    Messages.Add(args.Message);
+                }
+            };
+        }
+
+        public void Shutdown()
+        {
+        }
     }
 
     private static string[] GetIdentities(

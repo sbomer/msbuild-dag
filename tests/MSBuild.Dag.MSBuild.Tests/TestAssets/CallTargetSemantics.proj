@@ -1,0 +1,39 @@
+<Project>
+  <PropertyGroup>
+    <P>initial</P>
+    <Q>initial</Q>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <I Include="initial" />
+  </ItemGroup>
+
+  <Target Name="Called">
+    <PropertyGroup>
+      <P>called</P>
+      <Q>called</Q>
+    </PropertyGroup>
+    <ItemGroup>
+      <I Include="called" />
+    </ItemGroup>
+    <Message Text="CALLED P=$(P) Q=$(Q) I=@(I)" Importance="high" />
+  </Target>
+
+  <Target Name="Build">
+    <PropertyGroup>
+      <P>caller</P>
+    </PropertyGroup>
+    <ItemGroup>
+      <I Include="caller" />
+    </ItemGroup>
+    <Message Text="BEFORE P=$(P) Q=$(Q) I=@(I)" Importance="high" />
+    <CallTarget Targets="Called" />
+    <Message Text="AFTER P=$(P) Q=$(Q) I=@(I)" Importance="high" />
+  </Target>
+
+  <Target Name="Later"
+          AfterTargets="Build"
+          DependsOnTargets="Called">
+    <Message Text="LATER P=$(P) Q=$(Q) I=@(I)" Importance="high" />
+  </Target>
+</Project>
