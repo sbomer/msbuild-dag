@@ -1,0 +1,7 @@
+<Project>
+  <Target Name="Build">
+    <FutureTask>
+      <Output TaskParameter="Result" ItemName="I" />
+    </FutureTask>
+  </Target>
+</Project>

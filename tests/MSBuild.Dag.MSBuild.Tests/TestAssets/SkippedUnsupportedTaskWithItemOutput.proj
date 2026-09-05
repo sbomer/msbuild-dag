@@ -1,0 +1,13 @@
+<Project>
+  <ItemGroup>
+    <I Include="initial" />
+  </ItemGroup>
+
+  <Target Name="Build">
+    <FutureTask Condition="'false' == 'true'">
+      <Output TaskParameter="Result" ItemName="I" />
+    </FutureTask>
+
+    <Message Text="@(I)" />
+  </Target>
+</Project>

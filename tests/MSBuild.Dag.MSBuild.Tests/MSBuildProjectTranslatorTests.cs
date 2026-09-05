@@ -140,21 +140,18 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Fact]
-    public void SdkStyleReferenceCycleDoesNotMaskUnsupportedConstruct()
+    public void SdkStyleReferenceCycleReportsTargetOrderingContradiction()
     {
         var projectPath = Path.Combine(
             AppContext.BaseDirectory,
             "TestAssets",
             "SdkStyle.csproj");
 
-        var exception = Assert.Throws<NotSupportedException>(
+        var exception = Assert.Throws<InvalidOperationException>(
             () => new MSBuildProjectTranslator().Translate(projectPath, "Build"));
 
-        Assert.StartsWith(
-            "The restricted MSBuild translator does not support",
-            exception.Message,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain("orchestration", exception.Message);
+        Assert.Contains("Target ordering is contradictory", exception.Message);
+        Assert.IsType<TargetOrderCycleException>(exception.InnerException);
     }
 
     [Fact]
@@ -549,6 +546,59 @@ public sealed class MSBuildProjectTranslatorTests
         Assert.Equal("root/x/y", values.Get(result.Properties["Y"]));
     }
 
+    [Fact]
+    public async Task ExecutesPropertyConditionsInsideConditionalPropertyGroup()
+    {
+        var result = TranslateAsset(
+            "ConditionalPropertyGroupWithPropertyConditions.proj",
+            "Build");
+        var build = result.Targets["Build"];
+        var outer = Assert.Single(
+            build.Body.Operations.OfType<ConditionalRegionOperation>());
+        var inner = outer.WhenTrue.Operations
+            .OfType<ConditionalRegionOperation>()
+            .ToArray();
+        var values = new ValueStore();
+
+        await new BuildProgramExecutor(
+            result.Program,
+            values,
+            CreateEvaluator().EvaluateAsync)
+            .ExecuteAsync(build);
+
+        Assert.Equal(2, inner.Length);
+        Assert.All(
+            inner,
+            operation => Assert.NotSame(
+                outer.Condition,
+                operation.Condition));
+        Assert.Equal("new-x", values.Get(result.Properties["X"]));
+        Assert.Equal("new-y", values.Get(result.Properties["Y"]));
+        Assert.Equal("old-z", values.Get(result.Properties["Z"]));
+    }
+
+    [Fact]
+    public async Task SkipsUnsupportedPropertyConditionWhenGroupIsFalse()
+    {
+        var result = TranslateAsset(
+            "SkippedUnsupportedConditionedPropertyCondition.proj",
+            "Build");
+        var unsupported = Assert.Single(
+            result.Targets["Build"].Body.Operations
+                .SelectMany(FlattenOperations)
+                .OfType<UnsupportedConditionOperation>());
+        var values = new ValueStore();
+
+        await new BuildProgramExecutor(
+            result.Program,
+            values,
+            CreateEvaluator().EvaluateAsync)
+            .ExecuteAsync(result.Targets["Build"]);
+
+        Assert.Equal("'%(I.Extension)' == '.txt'", unsupported.Expression);
+        Assert.Equal("old-x", values.Get(result.Properties["X"]));
+    }
+
     [Theory]
     [InlineData("RuntimeDepends.proj", "ChooseDependencies")]
     [InlineData("RuntimeTaskOutputDepends.proj", "ChooseDependencies")]
@@ -891,6 +941,14 @@ public sealed class MSBuildProjectTranslatorTests
         true)]
     [InlineData(
         "SkippedUnsupportedTaskWithPropertyOutput.proj",
+        "FutureTask",
+        false)]
+    [InlineData(
+        "UnsupportedTaskWithItemOutput.proj",
+        "FutureTask",
+        true)]
+    [InlineData(
+        "SkippedUnsupportedTaskWithItemOutput.proj",
         "FutureTask",
         false)]
     public async Task DefersUnsupportedTasksUntilExecution(

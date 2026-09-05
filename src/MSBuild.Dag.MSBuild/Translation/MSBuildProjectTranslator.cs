@@ -1107,15 +1107,28 @@ public sealed class MSBuildProjectTranslator
                         }
                     }
 
-                    foreach (var output in task.Outputs
-                        .OfType<ProjectTaskOutputPropertyInstance>())
+                    foreach (var output in task.Outputs)
                     {
-                        if (!string.IsNullOrWhiteSpace(task.Condition))
+                        switch (output)
                         {
-                            AddPropertyRead(output.PropertyName);
-                        }
+                            case ProjectTaskOutputPropertyInstance property:
+                                if (!string.IsNullOrWhiteSpace(task.Condition))
+                                {
+                                    AddPropertyRead(property.PropertyName);
+                                }
 
-                        writeProperties.Add(output.PropertyName);
+                                writeProperties.Add(property.PropertyName);
+                                break;
+
+                            case ProjectTaskOutputItemInstance item:
+                                if (!string.IsNullOrWhiteSpace(task.Condition))
+                                {
+                                    AddItemRead(item.ItemType);
+                                }
+
+                                writeItems.Add(item.ItemType);
+                                break;
+                        }
                     }
 
                     break;
@@ -1467,7 +1480,14 @@ public sealed class MSBuildProjectTranslator
             return;
         }
 
-        foreach (var property in propertyGroup.Properties)
+        TranslatePropertyAssignments(propertyGroup.Properties, context);
+    }
+
+    private static void TranslatePropertyAssignments(
+        IEnumerable<ProjectPropertyGroupTaskPropertyInstance> properties,
+        TranslationContext context)
+    {
+        foreach (var property in properties)
         {
             if (string.IsNullOrWhiteSpace(property.Condition))
             {
@@ -1509,33 +1529,19 @@ public sealed class MSBuildProjectTranslator
         ProjectPropertyGroupTaskInstance propertyGroup,
         TranslationContext context)
     {
-        if (propertyGroup.Properties.Any(
-            property => !string.IsNullOrWhiteSpace(property.Condition)))
-        {
-            throw Unsupported(
-                "property conditions inside a conditioned PropertyGroup");
-        }
-
         var condition = context.TranslateCondition(
             propertyGroup.Condition,
             propertyGroup.Location.File);
         var whenTrue = context.CreateBranch();
         var whenFalse = context.CreateBranch();
-        var propertyNames = new List<string>();
 
-        foreach (var property in propertyGroup.Properties)
-        {
-            whenTrue.Context.SetProperty(
-                property.Name,
-                whenTrue.Context.ResolvePropertyExpression(property.Value));
-
-            if (!propertyNames.Contains(
-                property.Name,
-                StringComparer.OrdinalIgnoreCase))
-            {
-                propertyNames.Add(property.Name);
-            }
-        }
+        TranslatePropertyAssignments(
+            propertyGroup.Properties,
+            whenTrue.Context);
+        var propertyNames = propertyGroup.Properties
+            .Select(static property => property.Name)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
         var whenTrueOutputs = new List<Value>();
         var whenFalseOutputs = new List<Value>();
@@ -2208,6 +2214,9 @@ public sealed class MSBuildProjectTranslator
         var whenFalseOutputs = new List<Value>();
         var outputs = new List<Value>();
         var propertyOutputs = new List<(string Name, Value<string> Result)>();
+        var itemOutputs = new List<(
+            string Name,
+            Value<IReadOnlyList<MSBuildItem>> Result)>();
 
         foreach (var output in task.Outputs
             .OfType<ProjectTaskOutputPropertyInstance>())
@@ -2219,6 +2228,18 @@ public sealed class MSBuildProjectTranslator
                 whenFalse.Context.GetProperty(output.PropertyName));
             outputs.Add(result);
             propertyOutputs.Add((output.PropertyName, result));
+        }
+
+        foreach (var output in task.Outputs
+            .OfType<ProjectTaskOutputItemInstance>())
+        {
+            var result = new Value<IReadOnlyList<MSBuildItem>>();
+            whenTrueOutputs.Add(
+                whenTrue.Context.GetItems(output.ItemType));
+            whenFalseOutputs.Add(
+                whenFalse.Context.GetItems(output.ItemType));
+            outputs.Add(result);
+            itemOutputs.Add((output.ItemType, result));
         }
 
         var whenTrueOrder = GetBranchOrderOutput(whenTrue.Context);
@@ -2245,6 +2266,11 @@ public sealed class MSBuildProjectTranslator
         foreach (var (name, result) in propertyOutputs)
         {
             context.SetProperty(name, result);
+        }
+
+        foreach (var (name, result) in itemOutputs)
+        {
+            context.SetItems(name, result);
         }
 
         context.SetCurrentOrderToken(orderResult);
@@ -2308,7 +2334,13 @@ public sealed class MSBuildProjectTranslator
                 task.Name,
                 reason,
                 context.CreateControl()));
+        AddUnsupportedTaskOutputPlaceholders(task, context);
+    }
 
+    private static void AddUnsupportedTaskOutputPlaceholders(
+        ProjectTaskInstance task,
+        TranslationContext context)
+    {
         foreach (var output in task.Outputs
             .OfType<ProjectTaskOutputPropertyInstance>())
         {
@@ -2317,6 +2349,17 @@ public sealed class MSBuildProjectTranslator
                 context.TargetGuard);
             context.AddOperation(placeholder);
             context.SetProperty(output.PropertyName, placeholder.Result);
+        }
+
+        foreach (var output in task.Outputs
+            .OfType<ProjectTaskOutputItemInstance>())
+        {
+            var placeholder =
+                new ConstantOperation<IReadOnlyList<MSBuildItem>>(
+                    [],
+                    context.TargetGuard);
+            context.AddOperation(placeholder);
+            context.SetItems(output.ItemType, placeholder.Result);
         }
     }
 
@@ -2337,6 +2380,7 @@ public sealed class MSBuildProjectTranslator
                     task.Name,
                     invocation.UnsupportedReason,
                     context.CreateControl()));
+            AddUnsupportedTaskOutputPlaceholders(task, context);
             return;
         }
 

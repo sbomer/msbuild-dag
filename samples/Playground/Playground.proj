@@ -1,22 +1,14 @@
 <Project>
-  <ItemGroup>
-    <SubsetName Include="clr"
-                OnDemand="false"
-                Text="CoreCLR" />
-    <SubsetName Include="libs"
-                OnDemand="true"
-                Text="Libraries" />
-  </ItemGroup>
+  <PropertyGroup>
+    <A>true</A>
+  </PropertyGroup>
 
   <Target Name="Build">
-    <ItemGroup>
-      <SubsetName Text="- %(Identity)" />
-      <SubsetName
-        Condition="'%(OnDemand)' == 'true'"
-        Text="%(Text) [only runs on demand]" />
-    </ItemGroup>
-    <Message
-      Importance="high"
-      Text="@(SubsetName->'%(Text)', '; ')" />
+    <PropertyGroup Condition="'$(A)' == 'true'">
+      <B>yes</B>
+      <C Condition="'$(B)' == 'yes'">ok</C>
+    </PropertyGroup>
+
+    <Message Importance="High" Text="C=$(C)" />
   </Target>
 </Project>
