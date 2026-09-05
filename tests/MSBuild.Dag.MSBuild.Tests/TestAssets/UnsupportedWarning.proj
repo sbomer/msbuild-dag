@@ -1,0 +1,5 @@
+<Project>
+  <Target Name="Build">
+    <Warning Text="Unsupported warning task" />
+  </Target>
+</Project>

@@ -660,7 +660,7 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Fact]
-    public void ReportsWarningBeforeLaterTranslationFailure()
+    public async Task ReportsWarningsBeforeDeferredTaskFailure()
     {
         var warnings = new List<string>();
         var projectPath = Path.Combine(
@@ -668,14 +668,29 @@ public sealed class MSBuildProjectTranslatorTests
             "TestAssets",
             "WarningBeforeFailure.proj");
 
-        var exception = Assert.Throws<NotSupportedException>(
-            () => new MSBuildProjectTranslator().Translate(
-                projectPath,
-                "Build",
-                warnings.Add));
+        var result = new MSBuildProjectTranslator().Translate(
+            projectPath,
+            "Build",
+            warnings.Add);
+        var execution = new BuildProgramExecutor(
+            result.Program,
+            new ValueStore(),
+            CreateEvaluator().EvaluateAsync)
+            .ExecuteAsync(result.Targets["Build"]);
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await execution);
 
-        Assert.Single(warnings);
-        Assert.Contains("missing target 'Missing'", warnings[0]);
+        Assert.Equal(2, warnings.Count);
+        Assert.Contains(
+            warnings,
+            static warning => warning.Contains(
+                "missing target 'Missing'",
+                StringComparison.Ordinal));
+        Assert.Contains(
+            warnings,
+            static warning => warning.Contains(
+                "task 'Exec'",
+                StringComparison.Ordinal));
         Assert.Contains("task 'Exec'", exception.Message);
     }
 
@@ -843,10 +858,44 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Theory]
-    [InlineData("UnsupportedCallTarget.proj", true)]
-    [InlineData("SkippedUnsupportedCallTarget.proj", false)]
-    public async Task DefersCallTargetUntilExecution(
+    [InlineData(
+        "UnsupportedAllowEmptyTelemetry.proj",
+        "AllowEmptyTelemetry",
+        true)]
+    [InlineData(
+        "SkippedUnsupportedAllowEmptyTelemetry.proj",
+        "AllowEmptyTelemetry",
+        false)]
+    [InlineData("UnsupportedCallTarget.proj", "CallTarget", true)]
+    [InlineData("SkippedUnsupportedCallTarget.proj", "CallTarget", false)]
+    [InlineData("UnsupportedNETSdkError.proj", "NETSdkError", true)]
+    [InlineData("SkippedUnsupportedNETSdkError.proj", "NETSdkError", false)]
+    [InlineData("UnsupportedNETSdkWarning.proj", "NETSdkWarning", true)]
+    [InlineData(
+        "SkippedUnsupportedNETSdkWarning.proj",
+        "NETSdkWarning",
+        false)]
+    [InlineData("UnsupportedWarning.proj", "Warning", true)]
+    [InlineData("SkippedUnsupportedWarning.proj", "Warning", false)]
+    [InlineData(
+        "UnsupportedShowMissingWorkloads.proj",
+        "ShowMissingWorkloads",
+        true)]
+    [InlineData(
+        "SkippedUnsupportedShowMissingWorkloads.proj",
+        "ShowMissingWorkloads",
+        false)]
+    [InlineData(
+        "UnsupportedTaskWithPropertyOutput.proj",
+        "FutureTask",
+        true)]
+    [InlineData(
+        "SkippedUnsupportedTaskWithPropertyOutput.proj",
+        "FutureTask",
+        false)]
+    public async Task DefersUnsupportedTasksUntilExecution(
         string assetName,
+        string taskName,
         bool shouldThrow)
     {
         var warnings = new List<string>();
@@ -869,15 +918,15 @@ public sealed class MSBuildProjectTranslatorTests
             .ExecuteAsync(result.Targets["Build"]);
 
         Assert.Single(warnings);
-        Assert.Contains("does not support task 'CallTarget'", warnings[0]);
-        Assert.Equal("CallTarget", operation.TaskName);
+        Assert.Contains($"does not support task '{taskName}'", warnings[0]);
+        Assert.Equal(taskName, operation.TaskName);
 
         if (shouldThrow)
         {
             var exception = await Assert.ThrowsAsync<InvalidOperationException>(
                 async () => await execution);
             Assert.Contains(
-                "does not support task 'CallTarget'",
+                $"does not support task '{taskName}'",
                 exception.Message);
         }
         else

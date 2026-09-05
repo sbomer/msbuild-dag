@@ -1,0 +1,5 @@
+<Project>
+  <Target Name="Build">
+    <NETSdkError ResourceName="UnsupportedTargetFramework" />
+  </Target>
+</Project>

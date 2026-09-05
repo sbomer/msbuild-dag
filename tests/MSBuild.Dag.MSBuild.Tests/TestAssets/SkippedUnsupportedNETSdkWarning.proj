@@ -1,0 +1,11 @@
+<Project>
+  <PropertyGroup>
+    <ReportWarning>false</ReportWarning>
+  </PropertyGroup>
+
+  <Target Name="Build">
+    <NETSdkWarning
+      ResourceName="PreviewTargetFramework"
+      Condition="'$(ReportWarning)' == 'true'" />
+  </Target>
+</Project>

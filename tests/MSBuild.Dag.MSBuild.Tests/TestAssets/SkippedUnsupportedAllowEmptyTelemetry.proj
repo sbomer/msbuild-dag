@@ -1,0 +1,11 @@
+<Project>
+  <PropertyGroup>
+    <SendTelemetry>false</SendTelemetry>
+  </PropertyGroup>
+
+  <Target Name="Build">
+    <AllowEmptyTelemetry
+      EventName="build"
+      Condition="'$(SendTelemetry)' == 'true'" />
+  </Target>
+</Project>

@@ -2285,30 +2285,39 @@ public sealed class MSBuildProjectTranslator
             return;
         }
 
-        if (task.Name.Equals(
-            "CallTarget",
-            StringComparison.OrdinalIgnoreCase))
-        {
-            const string reason =
-                "The restricted MSBuild translator does not support task " +
-                "'CallTarget'.";
-            context.ReportTranslationWarning(
-                $"{reason} The task will fail if executed.");
-            context.AddOperation(
-                new UnsupportedTaskOperation(
-                    task.Name,
-                    reason,
-                    context.CreateControl()));
-            return;
-        }
-
         if (task.Name.Equals("MSBuild", StringComparison.OrdinalIgnoreCase))
         {
             TranslateMSBuild(task, context);
             return;
         }
 
-        throw Unsupported($"task '{task.Name}'");
+        TranslateUnsupportedTask(task, context);
+    }
+
+    private static void TranslateUnsupportedTask(
+        ProjectTaskInstance task,
+        TranslationContext context)
+    {
+        var reason =
+            $"The restricted MSBuild translator does not support task " +
+            $"'{task.Name}'.";
+        context.ReportTranslationWarning(
+            $"{reason} The task will fail if executed.");
+        context.AddOperation(
+            new UnsupportedTaskOperation(
+                task.Name,
+                reason,
+                context.CreateControl()));
+
+        foreach (var output in task.Outputs
+            .OfType<ProjectTaskOutputPropertyInstance>())
+        {
+            var placeholder = new ConstantOperation<string>(
+                string.Empty,
+                context.TargetGuard);
+            context.AddOperation(placeholder);
+            context.SetProperty(output.PropertyName, placeholder.Result);
+        }
     }
 
     private static void TranslateMSBuild(

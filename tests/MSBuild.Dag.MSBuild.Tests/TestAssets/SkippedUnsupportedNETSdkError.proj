@@ -1,0 +1,11 @@
+<Project>
+  <PropertyGroup>
+    <ReportError>false</ReportError>
+  </PropertyGroup>
+
+  <Target Name="Build">
+    <NETSdkError
+      ResourceName="UnsupportedTargetFramework"
+      Condition="'$(ReportError)' == 'true'" />
+  </Target>
+</Project>

@@ -1,0 +1,13 @@
+<Project>
+  <PropertyGroup>
+    <P>initial</P>
+  </PropertyGroup>
+
+  <Target Name="Build">
+    <FutureTask Condition="'false' == 'true'">
+      <Output TaskParameter="Result" PropertyName="P" />
+    </FutureTask>
+
+    <Message Text="$(P)" />
+  </Target>
+</Project>

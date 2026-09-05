@@ -1,0 +1,11 @@
+<Project>
+  <PropertyGroup>
+    <ReportWarning>false</ReportWarning>
+  </PropertyGroup>
+
+  <Target Name="Build">
+    <Warning
+      Text="Unsupported warning task"
+      Condition="'$(ReportWarning)' == 'true'" />
+  </Target>
+</Project>

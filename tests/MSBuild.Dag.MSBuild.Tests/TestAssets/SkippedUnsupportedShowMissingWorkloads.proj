@@ -1,0 +1,10 @@
+<Project>
+  <PropertyGroup>
+    <ShowWorkloads>false</ShowWorkloads>
+  </PropertyGroup>
+
+  <Target Name="Build">
+    <ShowMissingWorkloads
+      Condition="'$(ShowWorkloads)' == 'true'" />
+  </Target>
+</Project>

@@ -1,0 +1,5 @@
+<Project>
+  <Target Name="Build">
+    <AllowEmptyTelemetry EventName="build" />
+  </Target>
+</Project>
