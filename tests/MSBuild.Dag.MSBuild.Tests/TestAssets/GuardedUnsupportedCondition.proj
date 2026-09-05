@@ -1,0 +1,15 @@
+<Project>
+  <PropertyGroup>
+    <Run>false</Run>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <I Include="a.txt" />
+  </ItemGroup>
+
+  <Target Name="Build" Condition="'$(Run)' == 'true'">
+    <Message
+      Text="unreachable"
+      Condition="'%(I.Extension)' == '.txt'" />
+  </Target>
+</Project>

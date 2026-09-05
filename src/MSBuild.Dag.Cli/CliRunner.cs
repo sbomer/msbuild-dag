@@ -248,6 +248,26 @@ internal static class CliRunner
             return "unsupported task";
         }
 
+        if (operation is UnsupportedConditionOperation)
+        {
+            return "unsupported condition";
+        }
+
+        if (operation is UnsupportedPropertyExpressionOperation)
+        {
+            return "unsupported property expression";
+        }
+
+        if (operation is UnsupportedItemOperation)
+        {
+            return "unsupported item operation";
+        }
+
+        if (operation is UnsupportedItemExpressionOperation)
+        {
+            return "unsupported item expression";
+        }
+
         if (operation is ErrorOperation)
         {
             return "error";

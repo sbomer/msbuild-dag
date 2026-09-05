@@ -857,6 +857,182 @@ public sealed class MSBuildProjectTranslatorTests
         }
     }
 
+    [Theory]
+    [InlineData("UnsupportedCondition.proj", true)]
+    [InlineData("GuardedUnsupportedCondition.proj", false)]
+    public async Task DefersUnsupportedConditionUntilEvaluation(
+        string assetName,
+        bool shouldThrow)
+    {
+        var warnings = new List<string>();
+        var projectPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "TestAssets",
+            assetName);
+        var result = new MSBuildProjectTranslator().Translate(
+            projectPath,
+            "Build",
+            warnings.Add);
+        var unsupported = Assert.Single(
+            result.Targets["Build"].Body.Operations
+                .SelectMany(FlattenOperations)
+                .OfType<UnsupportedConditionOperation>());
+        var execution = new BuildProgramExecutor(
+            result.Program,
+            new ValueStore(),
+            CreateEvaluator().EvaluateAsync)
+            .ExecuteAsync(result.Targets["Build"]);
+
+        Assert.Single(warnings);
+        Assert.Contains("Unsupported condition", warnings[0]);
+        Assert.Equal(
+            "'%(I.Extension)' == '.txt'",
+            unsupported.Expression);
+
+        if (shouldThrow)
+        {
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                async () => await execution);
+            Assert.Contains("I.Extension", exception.Message);
+        }
+        else
+        {
+            await execution;
+        }
+    }
+
+    [Theory]
+    [InlineData("UnsupportedPropertyExpression.proj", true)]
+    [InlineData("GuardedUnsupportedPropertyExpression.proj", false)]
+    public async Task DefersUnsupportedPropertyExpressionUntilEvaluation(
+        string assetName,
+        bool shouldThrow)
+    {
+        var warnings = new List<string>();
+        var projectPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "TestAssets",
+            assetName);
+        var result = new MSBuildProjectTranslator().Translate(
+            projectPath,
+            "Build",
+            warnings.Add);
+        var unsupported = Assert.Single(
+            result.Targets["Build"].Body.Operations
+                .SelectMany(FlattenOperations)
+                .OfType<UnsupportedPropertyExpressionOperation>());
+        var execution = new BuildProgramExecutor(
+            result.Program,
+            new ValueStore(),
+            CreateEvaluator().EvaluateAsync)
+            .ExecuteAsync(result.Targets["Build"]);
+
+        Assert.Single(warnings);
+        Assert.Contains("Unsupported property expression", warnings[0]);
+        Assert.Equal("@(I->'%(FullPath)')", unsupported.Expression);
+
+        if (shouldThrow)
+        {
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                async () => await execution);
+            Assert.Contains("FullPath", exception.Message);
+        }
+        else
+        {
+            await execution;
+        }
+    }
+
+    [Theory]
+    [InlineData("UnsupportedItemOperation.proj", true)]
+    [InlineData("SkippedUnsupportedItemOperation.proj", false)]
+    public async Task DefersUnsupportedItemOperationUntilExecution(
+        string assetName,
+        bool shouldThrow)
+    {
+        var warnings = new List<string>();
+        var projectPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "TestAssets",
+            assetName);
+        var result = new MSBuildProjectTranslator().Translate(
+            projectPath,
+            "Build",
+            warnings.Add);
+        var unsupported = Assert.Single(
+            result.Targets["Build"].Body.Operations
+                .SelectMany(FlattenOperations)
+                .OfType<UnsupportedItemOperation>());
+        var values = new ValueStore();
+        var execution = new BuildProgramExecutor(
+            result.Program,
+            values,
+            CreateEvaluator().EvaluateAsync)
+            .ExecuteAsync(result.Targets["Build"]);
+
+        Assert.Single(warnings);
+        Assert.Contains("Unsupported item operation", warnings[0]);
+        Assert.Contains("Metadata=\"value\"", unsupported.Description);
+
+        if (shouldThrow)
+        {
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                async () => await execution);
+            Assert.Contains("Metadata", exception.Message);
+        }
+        else
+        {
+            await execution;
+            Assert.Equal(
+                ["existing"],
+                GetIdentities(values.Get(result.Items["I"])));
+        }
+    }
+
+    [Theory]
+    [InlineData("UnsupportedItemExpression.proj", true)]
+    [InlineData("SkippedUnsupportedItemExpression.proj", false)]
+    public async Task DefersUnsupportedItemExpressionUntilEvaluation(
+        string assetName,
+        bool shouldThrow)
+    {
+        var warnings = new List<string>();
+        var projectPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "TestAssets",
+            assetName);
+        var result = new MSBuildProjectTranslator().Translate(
+            projectPath,
+            "Build",
+            warnings.Add);
+        var unsupported = Assert.Single(
+            result.Targets["Build"].Body.Operations
+                .SelectMany(FlattenOperations)
+                .OfType<UnsupportedItemExpressionOperation>());
+        var values = new ValueStore();
+        var execution = new BuildProgramExecutor(
+            result.Program,
+            values,
+            CreateEvaluator().EvaluateAsync)
+            .ExecuteAsync(result.Targets["Build"]);
+
+        Assert.Single(warnings);
+        Assert.Contains("Unsupported item expression", warnings[0]);
+        Assert.Equal("@(I->'%(FullPath)')", unsupported.Expression);
+
+        if (shouldThrow)
+        {
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                async () => await execution);
+            Assert.Contains("FullPath", exception.Message);
+        }
+        else
+        {
+            await execution;
+            Assert.Empty(values.Get(result.Items["J"]));
+        }
+    }
+
     [Fact]
     public async Task TranslatesItemIdentityConditionToContainsDataflow()
     {
@@ -911,15 +1087,26 @@ public sealed class MSBuildProjectTranslatorTests
     [Fact]
     public void UnsupportedItemOperationReportsActualOperation()
     {
-        var exception = Assert.Throws<NotSupportedException>(
-            () => TranslateAsset("UnsupportedItemMetadata.proj", "Build"));
+        var warnings = new List<string>();
+        var projectPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "TestAssets",
+            "UnsupportedItemMetadata.proj");
+        var result = new MSBuildProjectTranslator().Translate(
+            projectPath,
+            "Build",
+            warnings.Add);
+        var operation = Assert.Single(
+            result.Targets["Build"].Body.Operations
+                .OfType<UnsupportedItemOperation>());
 
         Assert.Contains(
             "<Candidate Include=\"value\" Text=\"- %(Identity)\" />",
-            exception.Message);
+            operation.Description);
         Assert.Contains(
             "only Include with optional Exclude and metadata-only updates",
-            exception.Message);
+            operation.Description);
+        Assert.Single(warnings);
     }
 
     [Fact]
@@ -1892,6 +2079,26 @@ public sealed class MSBuildProjectTranslatorTests
                 static (operation, _, _) =>
                     ValueTask.FromException(
                         new InvalidOperationException(operation.Reason)))
+            .Add<UnsupportedConditionOperation>(
+                static (operation, _, _) =>
+                    ValueTask.FromException(
+                        new InvalidOperationException(
+                            operation.Expression)))
+            .Add<UnsupportedPropertyExpressionOperation>(
+                static (operation, _, _) =>
+                    ValueTask.FromException(
+                        new InvalidOperationException(
+                            operation.Expression)))
+            .Add<UnsupportedItemOperation>(
+                static (operation, _, _) =>
+                    ValueTask.FromException(
+                        new InvalidOperationException(
+                            operation.Description)))
+            .Add<UnsupportedItemExpressionOperation>(
+                static (operation, _, _) =>
+                    ValueTask.FromException(
+                        new InvalidOperationException(
+                            operation.Expression)))
             .Add<MissingTargetOperation>(
                 static (operation, _, _) =>
                     ValueTask.FromException(

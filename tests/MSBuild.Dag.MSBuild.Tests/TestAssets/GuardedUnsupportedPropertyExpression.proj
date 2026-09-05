@@ -1,0 +1,16 @@
+<Project>
+  <PropertyGroup>
+    <Run>false</Run>
+    <Result>initial</Result>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <I Include="a.txt" />
+  </ItemGroup>
+
+  <Target Name="Build">
+    <PropertyGroup>
+      <Result Condition="'$(Run)' == 'true'">@(I->'%(FullPath)')</Result>
+    </PropertyGroup>
+  </Target>
+</Project>

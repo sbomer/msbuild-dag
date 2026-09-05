@@ -1,0 +1,11 @@
+<Project>
+  <ItemGroup>
+    <I Include="a.txt" />
+  </ItemGroup>
+
+  <Target Name="Build">
+    <PropertyGroup>
+      <Result>@(I->'%(FullPath)')</Result>
+    </PropertyGroup>
+  </Target>
+</Project>

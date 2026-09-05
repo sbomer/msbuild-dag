@@ -1,0 +1,11 @@
+<Project>
+  <ItemGroup>
+    <I Include="a.txt" />
+  </ItemGroup>
+
+  <Target Name="Build">
+    <Message
+      Text="unreachable"
+      Condition="'%(I.Extension)' == '.txt'" />
+  </Target>
+</Project>

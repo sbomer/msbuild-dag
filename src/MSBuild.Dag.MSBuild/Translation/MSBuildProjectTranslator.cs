@@ -1649,10 +1649,12 @@ public sealed class MSBuildProjectTranslator
                             item.ItemType,
                             metadata.Value)))
                 {
-                    throw Unsupported(
-                        $"item operation {FormatItemOperation(item)}; metadata " +
-                        "updates currently support only literal text and " +
-                        "metadata references on the updated item");
+                    TranslateUnsupportedItemOperation(
+                        item,
+                        "metadata updates currently support only literal " +
+                        "text and metadata references on the updated item",
+                        context);
+                    continue;
                 }
 
                 Value<IReadOnlyList<bool>>? mask = null;
@@ -1666,8 +1668,11 @@ public sealed class MSBuildProjectTranslator
                         out var comparison,
                         out var literal))
                     {
-                        throw Unsupported(
-                            $"condition on item operation {FormatItemOperation(item)}");
+                        TranslateUnsupportedItemOperation(
+                            item,
+                            "the item condition requires unsupported batching",
+                            context);
+                        continue;
                     }
 
                     var metadataValues = new GetItemMetadataOperation(
@@ -1709,10 +1714,12 @@ public sealed class MSBuildProjectTranslator
                 !string.IsNullOrWhiteSpace(item.RemoveMetadata) ||
                 !string.IsNullOrWhiteSpace(item.KeepDuplicates))
             {
-                throw Unsupported(
-                    $"item operation {FormatItemOperation(item)}; only Include " +
-                    "with optional Exclude and metadata-only updates are " +
-                    "currently supported");
+                TranslateUnsupportedItemOperation(
+                    item,
+                    "only Include with optional Exclude and metadata-only " +
+                    "updates are currently supported",
+                    context);
+                continue;
             }
 
             if (string.IsNullOrWhiteSpace(item.Condition))
@@ -1721,12 +1728,6 @@ public sealed class MSBuildProjectTranslator
                     item.ItemType,
                     TranslateItemInclude(item, context));
                 continue;
-            }
-
-            if (!IsScalarPropertyCondition(item.Condition))
-            {
-                throw Unsupported(
-                    $"condition on item operation {FormatItemOperation(item)}");
             }
 
             var condition = context.TranslateCondition(
@@ -1753,6 +1754,56 @@ public sealed class MSBuildProjectTranslator
             context.AddOperation(conditional);
             context.SetItems(item.ItemType, result);
         }
+    }
+
+    private static void TranslateUnsupportedItemOperation(
+        ProjectItemGroupTaskItemInstance item,
+        string reason,
+        TranslationContext context)
+    {
+        var description =
+            $"item operation {FormatItemOperation(item)}; {reason}";
+        context.ReportTranslationWarning(
+            $"Unsupported {description}. The item operation will fail if " +
+            "executed.");
+
+        if (string.IsNullOrWhiteSpace(item.Condition))
+        {
+            var unsupported = new UnsupportedItemOperation(
+                description,
+                context.GetItems(item.ItemType),
+                context.TargetGuard);
+            context.AddOperation(unsupported);
+            context.SetItems(item.ItemType, unsupported.Result);
+            return;
+        }
+
+        var condition = context.TranslateCondition(
+            item.Condition,
+            item.Location.File);
+        var whenTrue = context.CreateBranch();
+        var whenFalse = context.CreateBranch();
+        var unsupportedWhenTrue = new UnsupportedItemOperation(
+            description,
+            whenTrue.Context.GetItems(item.ItemType),
+            whenTrue.Context.TargetGuard);
+        whenTrue.Context.AddOperation(unsupportedWhenTrue);
+        var result = new Value<IReadOnlyList<MSBuildItem>>();
+
+        context.AddOperation(
+            new ConditionalRegionOperation(
+                condition,
+                whenTrue.Arguments,
+                new OperationGraph(
+                    whenTrue.Parameters,
+                    whenTrue.Context.Operations,
+                    [unsupportedWhenTrue.Result]),
+                new OperationGraph(
+                    whenFalse.Parameters,
+                    whenFalse.Context.Operations,
+                    [whenFalse.Context.GetItems(item.ItemType)]),
+                [result]));
+        context.SetItems(item.ItemType, result);
     }
 
     private static Value<IReadOnlyList<MSBuildItem>> TranslateItemInclude(
@@ -1794,37 +1845,6 @@ public sealed class MSBuildProjectTranslator
         string.IsNullOrWhiteSpace(item.RemoveMetadata) &&
         string.IsNullOrWhiteSpace(item.KeepDuplicates) &&
         item.Metadata.Count > 0;
-
-    private static bool IsScalarPropertyCondition(string expression)
-    {
-        if (TryParseStringComparison(
-            expression,
-            out _,
-            out _,
-            out _))
-        {
-            return true;
-        }
-
-        if (TrySplitLogicalCondition(
-            expression,
-            "or",
-            out var left,
-            out var right))
-        {
-            return
-                IsScalarPropertyCondition(left) &&
-                IsScalarPropertyCondition(right);
-        }
-
-        return TrySplitLogicalCondition(
-                expression,
-                "and",
-                out left,
-                out right) &&
-            IsScalarPropertyCondition(left) &&
-            IsScalarPropertyCondition(right);
-    }
 
     private static bool TrySplitLogicalCondition(
         string expression,
@@ -2827,6 +2847,11 @@ public sealed class MSBuildProjectTranslator
                 return not.Result;
             }
 
+            if (s_itemMetadataReference.IsMatch(expression))
+            {
+                return AddUnsupportedCondition(expression);
+            }
+
             if (TryParseStringComparison(
                 expression,
                 out leftExpression,
@@ -2854,7 +2879,20 @@ public sealed class MSBuildProjectTranslator
                 };
             }
 
-            throw Unsupported($"target condition '{expression}'");
+            return AddUnsupportedCondition(expression);
+
+            Value<bool> AddUnsupportedCondition(
+                string unsupportedExpression)
+            {
+                ReportWarning?.Invoke(
+                    $"Unsupported condition '{unsupportedExpression}' will " +
+                    "fail if it is evaluated at runtime.");
+                var unsupported = new UnsupportedConditionOperation(
+                    unsupportedExpression,
+                    TargetGuard);
+                AddOperation(unsupported);
+                return unsupported.Result;
+            }
         }
 
         public Value<FileContents?> GetFileContents(string path) =>
@@ -2874,6 +2912,13 @@ public sealed class MSBuildProjectTranslator
 
         public Value<string> ResolvePropertyExpression(string expression)
         {
+            if (s_itemMetadataReference.IsMatch(expression) ||
+                expression.Contains("->", StringComparison.Ordinal) &&
+                expression.Contains("@(", StringComparison.Ordinal))
+            {
+                return AddUnsupportedPropertyExpression(expression);
+            }
+
             var propertyReferences = FindPropertyReferences(expression);
 
             if (propertyReferences.Count == 1 &&
@@ -2971,10 +3016,25 @@ public sealed class MSBuildProjectTranslator
 
             if (ContainsReference(expression))
             {
-                throw Unsupported($"property expression '{expression}'");
+                return AddUnsupportedPropertyExpression(expression);
             }
 
             return AddConstant(expression);
+
+            Value<string> AddUnsupportedPropertyExpression(
+                string unsupportedExpression)
+            {
+                ReportWarning?.Invoke(
+                    $"Unsupported property expression " +
+                    $"'{unsupportedExpression}' will fail if its value is " +
+                    "required at runtime.");
+                var unsupported =
+                    new UnsupportedPropertyExpressionOperation(
+                        unsupportedExpression,
+                        TargetGuard);
+                AddOperation(unsupported);
+                return unsupported.Result;
+            }
 
             Value<string> ResolvePropertyReference(string content)
             {
@@ -3061,7 +3121,14 @@ public sealed class MSBuildProjectTranslator
 
             if (ContainsReference(expression))
             {
-                throw Unsupported($"item expression '{expression}'");
+                ReportWarning?.Invoke(
+                    $"Unsupported item expression '{expression}' will fail " +
+                    "if its value is required at runtime.");
+                var unsupported = new UnsupportedItemExpressionOperation(
+                    expression,
+                    TargetGuard);
+                AddOperation(unsupported);
+                return unsupported.Result;
             }
 
             IReadOnlyList<MSBuildItem> values = expression

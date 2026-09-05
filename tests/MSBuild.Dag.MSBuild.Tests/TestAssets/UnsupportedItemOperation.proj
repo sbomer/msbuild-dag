@@ -1,0 +1,18 @@
+<Project>
+  <PropertyGroup>
+    <EnableItem>true</EnableItem>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <I Include="existing" />
+  </ItemGroup>
+
+  <Target Name="Build">
+    <ItemGroup>
+      <I
+        Include="new"
+        Metadata="value"
+        Condition="'$(EnableItem)' == 'true'" />
+    </ItemGroup>
+  </Target>
+</Project>

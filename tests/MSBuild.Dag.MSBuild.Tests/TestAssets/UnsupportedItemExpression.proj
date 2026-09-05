@@ -1,0 +1,17 @@
+<Project>
+  <PropertyGroup>
+    <EnableItem>true</EnableItem>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <I Include="a.txt" />
+  </ItemGroup>
+
+  <Target Name="Build">
+    <ItemGroup>
+      <J
+        Include="@(I->'%(FullPath)')"
+        Condition="'$(EnableItem)' == 'true'" />
+    </ItemGroup>
+  </Target>
+</Project>

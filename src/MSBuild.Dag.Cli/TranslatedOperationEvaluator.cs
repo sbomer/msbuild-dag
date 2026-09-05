@@ -295,6 +295,30 @@ internal sealed class TranslatedOperationEvaluator
                         new InvalidOperationException(
                             $"Task '{operation.TaskName}' cannot execute: " +
                             operation.Reason)))
+            .Add<UnsupportedConditionOperation>(
+                static (operation, _, _) =>
+                    ValueTask.FromException(
+                        new InvalidOperationException(
+                            $"Unsupported condition " +
+                            $"'{operation.Expression}' was evaluated.")))
+            .Add<UnsupportedPropertyExpressionOperation>(
+                static (operation, _, _) =>
+                    ValueTask.FromException(
+                        new InvalidOperationException(
+                            $"Unsupported property expression " +
+                            $"'{operation.Expression}' was evaluated.")))
+            .Add<UnsupportedItemOperation>(
+                static (operation, _, _) =>
+                    ValueTask.FromException(
+                        new InvalidOperationException(
+                            $"Unsupported {operation.Description} was " +
+                            "executed.")))
+            .Add<UnsupportedItemExpressionOperation>(
+                static (operation, _, _) =>
+                    ValueTask.FromException(
+                        new InvalidOperationException(
+                            $"Unsupported item expression " +
+                            $"'{operation.Expression}' was evaluated.")))
             .Add<MissingTargetOperation>(
                 static (operation, _, _) =>
                     ValueTask.FromException(
