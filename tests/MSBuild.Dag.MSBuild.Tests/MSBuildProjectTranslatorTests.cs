@@ -150,9 +150,8 @@ public sealed class MSBuildProjectTranslatorTests
         var exception = Assert.Throws<NotSupportedException>(
             () => new MSBuildProjectTranslator().Translate(projectPath, "Build"));
 
-        Assert.Contains("file path", exception.Message);
+        Assert.Contains("target condition", exception.Message);
         Assert.DoesNotContain("task conditions", exception.Message);
-        Assert.DoesNotContain("target condition", exception.Message);
         Assert.DoesNotContain("orchestration", exception.Message);
     }
 
@@ -1254,6 +1253,51 @@ public sealed class MSBuildProjectTranslatorTests
         Assert.Equal("Unsupported", operation.TargetName);
         Assert.Contains(
             "file path '%(Identity)' depends on item metadata",
+            exception.Message);
+    }
+
+    [Fact]
+    public async Task DefersItemListFilePathFailureUntilTargetExecution()
+    {
+        var result = TranslateAsset(
+            "ItemListExistsCondition.proj",
+            "Build");
+        var build = result.Targets["Build"];
+        var unsupported = result.Targets["Unsupported"];
+        var operation = Assert.Single(
+            unsupported.Body.Operations
+                .OfType<UnsupportedTargetOperation>());
+        var messages = new List<string>();
+
+        Assert.Contains(
+            result.Warnings,
+            warning =>
+                warning.Contains(
+                    "Target 'Unsupported' cannot be fully translated",
+                    StringComparison.Ordinal) &&
+                warning.Contains(
+                    "file path '@(Input)' depends on an item list",
+                    StringComparison.Ordinal));
+
+        await new BuildProgramExecutor(
+            result.Program,
+            new ValueStore(),
+            CreateEvaluator(
+                onMessage: (message, values) =>
+                    messages.Add(values.Get(message.Text))).EvaluateAsync)
+            .ExecuteAsync(build);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await new BuildProgramExecutor(
+                result.Program,
+                new ValueStore(),
+                CreateEvaluator().EvaluateAsync)
+                .ExecuteAsync(unsupported));
+
+        Assert.Equal(["build"], messages);
+        Assert.Equal("Unsupported", operation.TargetName);
+        Assert.Contains(
+            "file path '@(Input)' depends on an item list",
             exception.Message);
     }
 

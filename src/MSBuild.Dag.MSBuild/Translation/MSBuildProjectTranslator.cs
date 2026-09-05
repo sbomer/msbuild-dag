@@ -505,9 +505,13 @@ public sealed class MSBuildProjectTranslator
                     $"file path '{expression}' depends on item metadata.");
             }
 
-            if (s_itemReference.IsMatch(expression) ||
-                s_itemMetadataReference.IsMatch(expression) ||
-                s_escapeSequence.IsMatch(expression) ||
+            if (s_itemReference.IsMatch(expression))
+            {
+                throw new DeferredTargetTranslationException(
+                    $"file path '{expression}' depends on an item list.");
+            }
+
+            if (s_escapeSequence.IsMatch(expression) ||
                 expression.IndexOfAny(['*', '?']) >= 0)
             {
                 throw Unsupported(
