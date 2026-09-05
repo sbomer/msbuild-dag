@@ -1,0 +1,13 @@
+<Project>
+  <PropertyGroup>
+    <Root>root</Root>
+    <ResultPath>old</ResultPath>
+    <SetResultPath>true</SetResultPath>
+  </PropertyGroup>
+
+  <Target Name="Build">
+    <PropertyGroup>
+      <ResultPath Condition="'$(SetResultPath)' == 'true'">$(Root)/file.txt</ResultPath>
+    </PropertyGroup>
+  </Target>
+</Project>

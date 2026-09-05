@@ -331,7 +331,8 @@ public sealed class MSBuildProjectTranslatorTests
             build.Body.Operations.OfType<ConditionalRegionOperation>());
         var assignedValue = Assert.Single(
             conditional.WhenTrue.Operations
-                .OfType<ReplaceOperation<string>>());
+                .OfType<ConstantOperation<string>>(),
+            operation => operation.Content == "Debug");
         var values = new ValueStore();
 
         await new BuildProgramExecutor(
@@ -353,9 +354,6 @@ public sealed class MSBuildProjectTranslatorTests
         Assert.Equal(bodySymbol.Name, exportedSymbol.Name);
         Assert.NotEqual(bodySymbol.Version, exportedSymbol.Version);
         Assert.Equal("Debug", assignedValue.Content);
-        Assert.Same(
-            conditional.WhenTrue.Inputs[0],
-            assignedValue.Previous);
         Assert.DoesNotContain(
             build.Body.Operations,
             operation => operation is ConstantOperation<string>
@@ -363,8 +361,9 @@ public sealed class MSBuildProjectTranslatorTests
                 Content: "Debug",
             });
         Assert.Empty(conditional.WhenFalse.Operations);
-        Assert.Single(conditional.WhenTrue.Inputs);
-        Assert.Single(conditional.WhenFalse.Inputs);
+        Assert.Equal(
+            conditional.WhenTrue.Inputs.Count,
+            conditional.WhenFalse.Inputs.Count);
         Assert.Equal(
             expectedConfiguration,
             values.Get(result.Properties["Configuration"]));
@@ -387,17 +386,54 @@ public sealed class MSBuildProjectTranslatorTests
             CreateEvaluator().EvaluateAsync)
             .ExecuteAsync(build);
 
-        Assert.Equal(2, conditional.WhenTrue.Inputs.Count);
-        Assert.Equal(2, conditional.WhenFalse.Inputs.Count);
+        Assert.Equal(
+            conditional.WhenTrue.Inputs.Count,
+            conditional.WhenFalse.Inputs.Count);
         Assert.Empty(conditional.WhenTrue.Operations);
         Assert.Empty(conditional.WhenFalse.Operations);
-        Assert.Same(
-            conditional.WhenTrue.Inputs[1],
-            conditional.WhenTrue.Outputs[0]);
-        Assert.Same(
-            conditional.WhenFalse.Inputs[0],
-            conditional.WhenFalse.Outputs[0]);
+        Assert.Contains(
+            conditional.WhenTrue.Inputs,
+            value => ReferenceEquals(
+                value,
+                conditional.WhenTrue.Outputs[0]));
+        Assert.Contains(
+            result.ValueSymbols[conditional.WhenTrue.Outputs[0]],
+            symbol => symbol.Name == "$(Y)");
+        Assert.Contains(
+            conditional.WhenFalse.Inputs,
+            value => ReferenceEquals(
+                value,
+                conditional.WhenFalse.Outputs[0]));
+        Assert.Contains(
+            result.ValueSymbols[conditional.WhenFalse.Outputs[0]],
+            symbol => symbol.Name == "$(X)");
         Assert.Equal("New", values.Get(result.Properties["X"]));
+    }
+
+    [Fact]
+    public async Task ConditionalPropertyUsesGeneralExpressionLowering()
+    {
+        var result = TranslateAsset(
+            "ConditionalPropertyInterpolation.proj",
+            "Build");
+        var build = result.Targets["Build"];
+        var conditional = Assert.Single(
+            build.Body.Operations.OfType<ConditionalRegionOperation>());
+        var concat = Assert.Single(
+            conditional.WhenTrue.Operations
+                .OfType<ConcatStringsOperation>());
+        var values = new ValueStore();
+
+        await new BuildProgramExecutor(
+            result.Program,
+            values,
+            CreateEvaluator().EvaluateAsync)
+            .ExecuteAsync(build);
+
+        Assert.Same(concat.Result, conditional.WhenTrue.Outputs[0]);
+        Assert.Equal(
+            "root/file.txt",
+            values.Get(result.Properties["ResultPath"]));
     }
 
     [Theory]
@@ -413,7 +449,7 @@ public sealed class MSBuildProjectTranslatorTests
         var conditional = Assert.Single(
             build.Body.Operations.OfType<ConditionalRegionOperation>());
         var assignedValues = conditional.WhenTrue.Operations
-            .OfType<ReplaceOperation<string>>()
+            .OfType<ConstantOperation<string>>()
             .Where(operation => operation.Content is "A" or "B")
             .ToArray();
         var values = new ValueStore();
@@ -439,9 +475,6 @@ public sealed class MSBuildProjectTranslatorTests
         Assert.All(
             assignedValues,
             operation => Assert.IsNotAssignableFrom<IOrderedOperation>(operation));
-        Assert.Equal(
-            conditional.WhenTrue.Inputs,
-            assignedValues.Select(operation => operation.Previous).ToArray());
         Assert.Equal(
             ["$(X)", "$(Y)"],
             conditional.WhenTrue.Inputs
@@ -487,6 +520,33 @@ public sealed class MSBuildProjectTranslatorTests
         Assert.NotSame(conditional.Outputs[1], result.Properties["Y"]);
         Assert.Equal(expectedX, values.Get(result.Properties["X"]));
         Assert.Equal(expectedY, values.Get(result.Properties["Y"]));
+    }
+
+    [Fact]
+    public async Task ConditionalPropertyGroupUsesGeneralExpressionLowering()
+    {
+        var result = TranslateAsset(
+            "ConditionalPropertyGroupInterpolation.proj",
+            "Build");
+        var build = result.Targets["Build"];
+        var conditional = Assert.Single(
+            build.Body.Operations.OfType<ConditionalRegionOperation>());
+        var values = new ValueStore();
+
+        Assert.Equal(
+            2,
+            conditional.WhenTrue.Operations
+                .OfType<ConcatStringsOperation>()
+                .Count());
+
+        await new BuildProgramExecutor(
+            result.Program,
+            values,
+            CreateEvaluator().EvaluateAsync)
+            .ExecuteAsync(build);
+
+        Assert.Equal("root/x", values.Get(result.Properties["X"]));
+        Assert.Equal("root/x/y", values.Get(result.Properties["Y"]));
     }
 
     [Theory]

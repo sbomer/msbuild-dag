@@ -1,0 +1,14 @@
+<Project>
+  <PropertyGroup>
+    <Root>root</Root>
+    <X>old-x</X>
+    <Y>old-y</Y>
+  </PropertyGroup>
+
+  <Target Name="Build">
+    <PropertyGroup Condition="'$(Root)' != ''">
+      <X>$(Root)/x</X>
+      <Y>$(X)/y</Y>
+    </PropertyGroup>
+  </Target>
+</Project>

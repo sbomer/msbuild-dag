@@ -1143,82 +1143,30 @@ public sealed class MSBuildProjectTranslator
                 continue;
             }
 
-            var previousValue = context.GetProperty(property.Name);
             var condition = context.TranslateCondition(
                 property.Condition,
                 property.Location.File);
-            var inputs = new List<Value<string>> { previousValue };
-            var whenTrueInputs = new List<Value<string>>
-            {
-                new(),
-            };
-            var whenFalseInputs = new List<Value<string>>
-            {
-                new(),
-            };
-            var whenTrueOperations = new List<DagOperation>();
-            Value<string> whenTrueOutput;
-
-            context.CopySymbols(previousValue, whenTrueInputs[0]);
-            context.CopySymbols(previousValue, whenFalseInputs[0]);
-
-            if (TryGetReference(
-                property.Value,
-                "$(",
-                out var referencedProperty))
-            {
-                var referencedValue =
-                    context.GetProperty(referencedProperty);
-                var referencedIndex = inputs.FindIndex(
-                    value => ReferenceEquals(value, referencedValue));
-
-                if (referencedIndex < 0)
-                {
-                    referencedIndex = inputs.Count;
-                    inputs.Add(referencedValue);
-                    whenTrueInputs.Add(new Value<string>());
-                    whenFalseInputs.Add(new Value<string>());
-                    context.CopySymbols(
-                        referencedValue,
-                        whenTrueInputs[referencedIndex]);
-                    context.CopySymbols(
-                        referencedValue,
-                        whenFalseInputs[referencedIndex]);
-                }
-
-                whenTrueOutput = whenTrueInputs[referencedIndex];
-            }
-            else
-            {
-                if (ContainsReference(property.Value))
-                {
-                    throw Unsupported(
-                        $"property expression '{property.Value}'");
-                }
-
-                var constant = new ReplaceOperation<string>(
-                    whenTrueInputs[0],
-                    property.Value,
-                    context.TargetGuard);
-                whenTrueOperations.Add(constant);
-                whenTrueOutput = constant.Result;
-            }
-
+            var whenTrue = context.CreateBranch();
+            var whenFalse = context.CreateBranch();
+            var whenTrueOutput =
+                whenTrue.Context.ResolvePropertyExpression(property.Value);
+            var whenFalseOutput =
+                whenFalse.Context.GetProperty(property.Name);
             var result = new Value<string>();
             context.AddPropertySymbol(property.Name, whenTrueOutput);
-            var conditional = new ConditionalRegionOperation(
-                condition,
-                inputs.Cast<Value>().ToArray(),
-                new OperationGraph(
-                    whenTrueInputs.Cast<Value>().ToArray(),
-                    whenTrueOperations,
-                    [whenTrueOutput]),
-                new OperationGraph(
-                    whenFalseInputs.Cast<Value>().ToArray(),
-                    [],
-                    [whenFalseInputs[0]]),
-                [result]);
-            context.AddOperation(conditional);
+            context.AddOperation(
+                new ConditionalRegionOperation(
+                    condition,
+                    whenTrue.Arguments,
+                    new OperationGraph(
+                        whenTrue.Parameters,
+                        whenTrue.Context.Operations,
+                        [whenTrueOutput]),
+                    new OperationGraph(
+                        whenFalse.Parameters,
+                        whenFalse.Context.Operations,
+                        [whenFalseOutput]),
+                    [result]));
             context.SetProperty(property.Name, result);
         }
     }
@@ -1234,59 +1182,52 @@ public sealed class MSBuildProjectTranslator
                 "property conditions inside a conditioned PropertyGroup");
         }
 
-        if (propertyGroup.Properties.Any(
-            property => ContainsReference(property.Value)))
-        {
-            throw Unsupported(
-                "property references inside a conditioned PropertyGroup");
-        }
-
         var condition = context.TranslateCondition(
             propertyGroup.Condition,
             propertyGroup.Location.File);
-        var inputs = new List<Value>();
-        var whenTrueInputs = new List<Value>();
-        var whenFalseInputs = new List<Value>();
-        var whenTrueOperations = new List<DagOperation>();
+        var whenTrue = context.CreateBranch();
+        var whenFalse = context.CreateBranch();
+        var propertyNames = new List<string>();
+
+        foreach (var property in propertyGroup.Properties)
+        {
+            whenTrue.Context.SetProperty(
+                property.Name,
+                whenTrue.Context.ResolvePropertyExpression(property.Value));
+
+            if (!propertyNames.Contains(
+                property.Name,
+                StringComparer.OrdinalIgnoreCase))
+            {
+                propertyNames.Add(property.Name);
+            }
+        }
+
         var whenTrueOutputs = new List<Value>();
         var whenFalseOutputs = new List<Value>();
         var outputs = new List<Value>();
         var properties = new List<(string Name, Value<string> Result)>();
 
-        foreach (var property in propertyGroup.Properties)
+        foreach (var propertyName in propertyNames)
         {
-            var previousValue = context.GetProperty(property.Name);
-            var whenTruePrevious = new Value<string>();
-            var whenFalsePrevious = new Value<string>();
-            var assignedValue = new ReplaceOperation<string>(
-                whenTruePrevious,
-                property.Value,
-                context.TargetGuard);
             var result = new Value<string>();
 
-            context.CopySymbols(previousValue, whenTruePrevious);
-            context.CopySymbols(previousValue, whenFalsePrevious);
-            context.AddPropertySymbol(property.Name, assignedValue.Result);
-            inputs.Add(previousValue);
-            whenTrueInputs.Add(whenTruePrevious);
-            whenFalseInputs.Add(whenFalsePrevious);
-            whenTrueOperations.Add(assignedValue);
-            whenTrueOutputs.Add(assignedValue.Result);
-            whenFalseOutputs.Add(whenFalsePrevious);
+            whenTrueOutputs.Add(whenTrue.Context.GetProperty(propertyName));
+            whenFalseOutputs.Add(whenFalse.Context.GetProperty(propertyName));
             outputs.Add(result);
-            properties.Add((property.Name, result));
+            properties.Add((propertyName, result));
         }
 
         var conditional = new ConditionalRegionOperation(
             condition,
-            inputs,
+            whenTrue.Arguments,
             new OperationGraph(
-                whenTrueInputs,
-                whenTrueOperations,
+                whenTrue.Parameters,
+                whenTrue.Context.Operations,
                 whenTrueOutputs),
             new OperationGraph(
-                whenFalseInputs,
-                [],
+                whenFalse.Parameters,
+                whenFalse.Context.Operations,
                 whenFalseOutputs),
             outputs);
         context.AddOperation(conditional);
