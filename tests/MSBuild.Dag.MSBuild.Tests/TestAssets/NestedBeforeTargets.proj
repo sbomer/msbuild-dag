@@ -1,0 +1,13 @@
+<Project>
+  <Target Name="Anchor">
+    <Message Importance="High" Text="Anchor" />
+  </Target>
+
+  <Target Name="A" BeforeTargets="Anchor">
+    <Message Importance="High" Text="A" />
+  </Target>
+
+  <Target Name="B" BeforeTargets="Anchor;A">
+    <Message Importance="High" Text="B" />
+  </Target>
+</Project>

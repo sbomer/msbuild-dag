@@ -85,6 +85,44 @@ public sealed class BuildProgramTests
     }
 
     [Fact]
+    public void PlansRequestInStructuralOrder()
+    {
+        var first = EmptyTarget();
+        var second = EmptyTarget();
+        var after = EmptyTarget();
+        var target = new Target(
+            [first, second],
+            [],
+            [],
+            new OperationGraph([]),
+            [after]);
+        var program = new BuildProgram(
+            [after, target, second, first]);
+
+        Assert.Equal(
+            [first, second, target, after],
+            program.GetRequestOrder(target));
+    }
+
+    [Fact]
+    public void RejectsRequestMissingStrictPredecessor()
+    {
+        var after = EmptyTarget();
+        var anchor = new Target(
+            [],
+            [],
+            [],
+            new OperationGraph([]),
+            [after]);
+        var program = new BuildProgram([after, anchor]);
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => program.GetRequestOrder(after));
+
+        Assert.Contains("program order", exception.Message);
+    }
+
+    [Fact]
     public void RejectsTargetReferenceOutsideGraph()
     {
         var missing = EmptyTarget();

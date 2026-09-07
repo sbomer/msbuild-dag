@@ -78,6 +78,44 @@ public sealed class BuildProgramExecutorTests
     }
 
     [Fact]
+    public async Task RejectsRequestWhoseMSBuildOrderConflictsWithProgram()
+    {
+        var executionOrder = new List<string>();
+        var b = CreateTarget("B");
+        var a = new Target(
+            [],
+            [],
+            [],
+            CreateBody("A"),
+            [b]);
+        var program = new BuildProgram([b, a]);
+        var executor = new BuildProgramExecutor(
+            program,
+            new ValueStore(),
+            (operation, _, _) =>
+            {
+                executionOrder.Add(((RecordingOperation)operation).Name);
+                return ValueTask.CompletedTask;
+            });
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await executor.ExecuteAsync(b));
+
+        Assert.Contains("program order", exception.Message);
+        Assert.Empty(executionOrder);
+
+        await executor.ExecuteAsync(a);
+
+        Assert.Equal(["A", "B"], executionOrder);
+
+        static Target CreateTarget(string name) =>
+            new([], [], CreateBody(name));
+
+        static OperationGraph CreateBody(string name) =>
+            new([new RecordingOperation(name)]);
+    }
+
+    [Fact]
     public async Task AcceptsRequestAfterGlobalPredecessorCompletes()
     {
         var executionOrder = new List<string>();

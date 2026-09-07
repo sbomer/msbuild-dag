@@ -407,19 +407,64 @@ public sealed class MSBuildProjectTranslator
             TargetDefinition,
             IReadOnlyList<TargetDefinition>>(
                 ReferenceEqualityComparer.Instance);
+        var definitionOrderPredecessors = new Dictionary<
+            TargetDefinition,
+            List<TargetDefinition>>(
+                ReferenceEqualityComparer.Instance);
 
         foreach (var sourceTarget in sourceTargets)
         {
+            var targetDefinition = createdDefinitions[sourceTarget];
             definitionPreludes.Add(
-                createdDefinitions[sourceTarget],
-                links.Preludes[sourceTarget]
+                targetDefinition,
+                links.Dependencies[sourceTarget]
+                    .Concat(links.BeforeTargets[sourceTarget])
                     .Select(reference => createdDefinitions[reference])
                     .ToArray());
             definitionEpilogues.Add(
-                createdDefinitions[sourceTarget],
-                links.Epilogues[sourceTarget]
+                targetDefinition,
+                links.AfterTargets[sourceTarget]
                     .Select(reference => createdDefinitions[reference])
                     .ToArray());
+            definitionOrderPredecessors.Add(
+                targetDefinition,
+                []);
+        }
+
+        foreach (var sourceTarget in sourceTargets)
+        {
+            MSBuildTarget? previous = null;
+
+            foreach (var current in
+                links.Dependencies[sourceTarget].Append(sourceTarget))
+            {
+                if (previous is not null)
+                {
+                    AddDefinitionPredecessor(
+                        definitionOrderPredecessors[
+                            createdDefinitions[current]],
+                        createdDefinitions[previous]);
+                }
+
+                previous = current;
+            }
+
+            foreach (var beforeTarget in links.BeforeTargets[sourceTarget])
+            {
+                AddDefinitionPredecessor(
+                    definitionOrderPredecessors[
+                        createdDefinitions[sourceTarget]],
+                    createdDefinitions[beforeTarget]);
+            }
+
+            foreach (var afterTarget in links.AfterTargets[sourceTarget])
+            {
+                var predecessors = definitionOrderPredecessors[
+                    createdDefinitions[afterTarget]];
+                AddDefinitionPredecessor(
+                    predecessors,
+                    createdDefinitions[sourceTarget]);
+            }
         }
 
         BuildLinkResult linked;
@@ -438,7 +483,12 @@ public sealed class MSBuildProjectTranslator
                 .Select(target => createdDefinitions[target])
                 .ToArray(),
             definitionPreludes,
-            definitionEpilogues);
+            definitionEpilogues,
+            definitionOrderPredecessors.ToDictionary(
+                pair => pair.Key,
+                pair => (IReadOnlyList<TargetDefinition>)pair.Value.ToArray(),
+                (IEqualityComparer<TargetDefinition>)
+                    ReferenceEqualityComparer.Instance));
 
         try
         {
@@ -902,7 +952,9 @@ public sealed class MSBuildProjectTranslator
             StringComparer.OrdinalIgnoreCase);
         var preludes = new Dictionary<MSBuildTarget, List<MSBuildTarget>>(
             ReferenceEqualityComparer.Instance);
-        var epilogues = new Dictionary<MSBuildTarget, List<MSBuildTarget>>(
+        var beforeTargets = new Dictionary<MSBuildTarget, List<MSBuildTarget>>(
+            ReferenceEqualityComparer.Instance);
+        var afterTargets = new Dictionary<MSBuildTarget, List<MSBuildTarget>>(
             ReferenceEqualityComparer.Instance);
         var missingDependencies = new List<MissingTargetDependency>();
         var missingRegistrations = new List<MissingTargetRegistration>();
@@ -919,7 +971,8 @@ public sealed class MSBuildProjectTranslator
                         propertyAssignments),
                     targetsByName,
                     missingDependencies));
-            epilogues.Add(target, []);
+            beforeTargets.Add(target, []);
+            afterTargets.Add(target, []);
         }
 
         foreach (var target in targets)
@@ -936,7 +989,7 @@ public sealed class MSBuildProjectTranslator
                 targetsByName,
                 missingRegistrations))
             {
-                AddDistinct(preludes[anchor], target);
+                AddDistinct(beforeTargets[anchor], target);
             }
 
             foreach (var anchor in ResolveTargetList(
@@ -951,7 +1004,7 @@ public sealed class MSBuildProjectTranslator
                 targetsByName,
                 missingRegistrations))
             {
-                AddDistinct(epilogues[anchor], target);
+                AddDistinct(afterTargets[anchor], target);
             }
         }
 
@@ -971,7 +1024,8 @@ public sealed class MSBuildProjectTranslator
 
         return new TargetLinks(
             CopyLists(preludes),
-            CopyLists(epilogues),
+            CopyLists(beforeTargets),
+            CopyLists(afterTargets),
             warnings,
             missingDependencies);
     }
@@ -1467,6 +1521,18 @@ public sealed class MSBuildProjectTranslator
         if (!targets.Contains(target, ReferenceEqualityComparer.Instance))
         {
             targets.Add(target);
+        }
+    }
+
+    private static void AddDefinitionPredecessor(
+        List<TargetDefinition> predecessors,
+        TargetDefinition predecessor)
+    {
+        if (!predecessors.Contains(
+            predecessor,
+            ReferenceEqualityComparer.Instance))
+        {
+            predecessors.Add(predecessor);
         }
     }
 
@@ -2601,8 +2667,15 @@ public sealed class MSBuildProjectTranslator
         OperationGraph Graph);
 
     private sealed record TargetLinks(
-        IReadOnlyDictionary<MSBuildTarget, IReadOnlyList<MSBuildTarget>> Preludes,
-        IReadOnlyDictionary<MSBuildTarget, IReadOnlyList<MSBuildTarget>> Epilogues,
+        IReadOnlyDictionary<
+            MSBuildTarget,
+            IReadOnlyList<MSBuildTarget>> Dependencies,
+        IReadOnlyDictionary<
+            MSBuildTarget,
+            IReadOnlyList<MSBuildTarget>> BeforeTargets,
+        IReadOnlyDictionary<
+            MSBuildTarget,
+            IReadOnlyList<MSBuildTarget>> AfterTargets,
         IReadOnlyList<string> Warnings,
         IReadOnlyList<MissingTargetDependency> MissingDependencies);
 

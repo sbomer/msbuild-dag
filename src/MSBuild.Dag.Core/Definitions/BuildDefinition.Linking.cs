@@ -21,7 +21,7 @@ public sealed partial class BuildDefinition
 
         ValidateReferences(targetSet);
 
-        var dependencies = BuildOrderDependencies();
+        var dependencies = _orderPredecessors;
         var linkOrder = GetLinkOrder(dependencies);
         var orderPredecessors = GetOrderPredecessors(dependencies);
 
@@ -75,7 +75,6 @@ public sealed partial class BuildDefinition
                 var source = GetReachingValue(
                     target,
                     input.Location,
-                    linkOrder,
                     orderPredecessors,
                     entryValues,
                     exports);
@@ -145,10 +144,25 @@ public sealed partial class BuildDefinition
                     .ToArray());
         }
 
+        var linkedOrderPredecessors =
+            new Dictionary<Target, IReadOnlySet<Target>>(
+                ReferenceEqualityComparer.Instance);
+
+        foreach (var target in Targets)
+        {
+            linkedOrderPredecessors.Add(
+                linkedTargets[target],
+                new HashSet<Target>(
+                    GetOrderPredecessors(target)
+                        .Select(predecessor => linkedTargets[predecessor]),
+                    ReferenceEqualityComparer.Instance));
+        }
+
         var program = new BuildProgram(
             Targets.Select(target => linkedTargets[target]).ToArray(),
             initialContents,
-            inputValues.Values.ToArray());
+            inputValues.Values.ToArray(),
+            linkedOrderPredecessors);
 
         return new BuildLinkResult(
             program,
@@ -166,7 +180,9 @@ public sealed partial class BuildDefinition
         foreach (var target in Targets)
         {
             foreach (var referencedTarget in
-                GetPrelude(target).Concat(GetEpilogue(target)))
+                GetPrelude(target)
+                    .Concat(GetEpilogue(target))
+                    .Concat(GetOrderPredecessors(target)))
             {
                 if (!targets.Contains(referencedTarget))
                 {
@@ -176,51 +192,6 @@ public sealed partial class BuildDefinition
                 }
             }
         }
-    }
-
-    private IReadOnlyDictionary<TargetDefinition, IReadOnlyList<TargetDefinition>>
-        BuildOrderDependencies()
-    {
-        var dependencies =
-            new Dictionary<TargetDefinition, List<TargetDefinition>>(
-                ReferenceEqualityComparer.Instance);
-
-        foreach (var target in Targets)
-        {
-            dependencies.Add(target, []);
-        }
-
-        foreach (var target in Targets)
-        {
-            var sequence = GetPrelude(target)
-                .Append(target)
-                .Concat(GetEpilogue(target))
-                .ToArray();
-
-            for (var index = 1; index < sequence.Length; index++)
-            {
-                var predecessors = dependencies[sequence[index]];
-                var predecessor = sequence[index - 1];
-
-                if (!predecessors.Contains(
-                    predecessor,
-                    ReferenceEqualityComparer.Instance))
-                {
-                    predecessors.Add(predecessor);
-                }
-            }
-        }
-
-        var result =
-            new Dictionary<TargetDefinition, IReadOnlyList<TargetDefinition>>(
-                ReferenceEqualityComparer.Instance);
-
-        foreach (var (target, predecessors) in dependencies)
-        {
-            result.Add(target, predecessors.ToArray());
-        }
-
-        return result;
     }
 
     private IReadOnlyList<TargetDefinition> GetLinkOrder(
@@ -376,7 +347,6 @@ public sealed partial class BuildDefinition
     private Value GetReachingValue(
         TargetDefinition target,
         Location location,
-        IReadOnlyList<TargetDefinition> linkOrder,
         IReadOnlyDictionary<TargetDefinition, IReadOnlySet<TargetDefinition>>
             orderPredecessors,
         IReadOnlyDictionary<Location, Value> initialValues,
@@ -384,22 +354,16 @@ public sealed partial class BuildDefinition
             TargetDefinition,
             IReadOnlyDictionary<Value, Value>> exports)
     {
-        TargetDefinition? producer = null;
-
-        foreach (var candidate in linkOrder)
-        {
-            if (ReferenceEquals(candidate, target))
-            {
-                break;
-            }
-
-            if (orderPredecessors[target].Contains(candidate) &&
-                candidate.Outputs.Any(
+        var producers = orderPredecessors[target]
+            .Where(
+                candidate => candidate.Outputs.Any(
                     output => ReferenceEquals(output.Location, location)))
-            {
-                producer = candidate;
-            }
-        }
+            .ToArray();
+        var producer = producers.SingleOrDefault(
+            candidate => producers.All(
+                other =>
+                    ReferenceEquals(candidate, other) ||
+                    orderPredecessors[candidate].Contains(other)));
 
         if (producer is not null)
         {

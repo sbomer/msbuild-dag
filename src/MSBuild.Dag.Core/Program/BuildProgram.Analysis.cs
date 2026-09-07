@@ -208,7 +208,8 @@ public sealed partial class BuildProgram
         }
     }
 
-    private void BuildPrecedence()
+    private void BuildPrecedence(
+        IReadOnlyDictionary<Target, IReadOnlySet<Target>>? declaredOrder)
     {
         var predecessors = new Dictionary<Target, HashSet<Target>>(
             ReferenceEqualityComparer.Instance);
@@ -236,20 +237,18 @@ public sealed partial class BuildProgram
             }
         }
 
-        foreach (var target in Targets)
+        if (declaredOrder is null)
         {
-            var sequence = target.Prelude
-                .Append(target)
-                .Concat(target.Epilogue)
-                .ToArray();
-
-            for (var index = 1; index < sequence.Length; index++)
-            {
-                AddPrecedence(
-                    sequence[index - 1],
-                    sequence[index],
-                    isOrdering: true);
-            }
+            AddOrder(
+                TargetOrder.CreateImmediatePredecessors(
+                    Targets,
+                    target => target.Prelude,
+                    target => target.Epilogue));
+        }
+        else
+        {
+            ValidateDeclaredOrder(declaredOrder);
+            AddOrder(declaredOrder);
         }
 
         foreach (var (target, targetPredecessors) in predecessors)
@@ -257,7 +256,20 @@ public sealed partial class BuildProgram
             _predecessors.Add(target, targetPredecessors.ToArray());
             _orderPredecessors.Add(
                 target,
-                orderPredecessors[target].ToArray());
+                GetTransitiveOrderPredecessors(target).ToArray());
+        }
+
+        void AddOrder<TCollection>(
+            IReadOnlyDictionary<Target, TCollection> targetOrder)
+            where TCollection : IEnumerable<Target>
+        {
+            foreach (var target in Targets)
+            {
+                foreach (var predecessor in targetOrder[target])
+                {
+                    AddPrecedence(predecessor, target, isOrdering: true);
+                }
+            }
         }
 
         void AddPrecedence(
@@ -270,6 +282,63 @@ public sealed partial class BuildProgram
             if (isOrdering)
             {
                 orderPredecessors[after].Add(before);
+            }
+        }
+
+        void ValidateDeclaredOrder(
+            IReadOnlyDictionary<Target, IReadOnlySet<Target>> order)
+        {
+            var targets = new HashSet<Target>(
+                Targets,
+                ReferenceEqualityComparer.Instance);
+
+            if (order.Count != Targets.Count)
+            {
+                throw new ArgumentException(
+                    "The declared target order must contain every program target.",
+                    nameof(declaredOrder));
+            }
+
+            foreach (var target in Targets)
+            {
+                if (!order.TryGetValue(target, out var targetPredecessors))
+                {
+                    throw new ArgumentException(
+                        "The declared target order must contain every program target.",
+                        nameof(declaredOrder));
+                }
+
+                ArgumentNullException.ThrowIfNull(
+                    targetPredecessors,
+                    nameof(declaredOrder));
+
+                if (targetPredecessors.Any(
+                    predecessor => !targets.Contains(predecessor)))
+                {
+                    throw new ArgumentException(
+                        "The declared target order can only reference program targets.",
+                        nameof(declaredOrder));
+                }
+            }
+
+        }
+
+        HashSet<Target> GetTransitiveOrderPredecessors(Target target)
+        {
+            var result = new HashSet<Target>(
+                ReferenceEqualityComparer.Instance);
+            Add(orderPredecessors[target]);
+            return result;
+
+            void Add(IEnumerable<Target> candidates)
+            {
+                foreach (var candidate in candidates)
+                {
+                    if (result.Add(candidate))
+                    {
+                        Add(orderPredecessors[candidate]);
+                    }
+                }
             }
         }
     }

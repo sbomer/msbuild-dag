@@ -27,28 +27,19 @@ public sealed partial class BuildLinkResult
             state.Add(location, value);
         }
 
-        var activated = new HashSet<TargetDefinition>(
-            ReferenceEqualityComparer.Instance);
-        Activate(requestedTarget);
-        var completed = new HashSet<Target>(
-            ReferenceEqualityComparer.Instance);
-        var remaining = new HashSet<TargetDefinition>(
-            activated,
-            ReferenceEqualityComparer.Instance);
+        var definitionsByTarget =
+            new Dictionary<Target, TargetDefinition>(
+                ReferenceEqualityComparer.Instance);
 
-        while (remaining.Count > 0)
+        foreach (var definition in _definitions)
         {
-            var target = _definitions.FirstOrDefault(
-                candidate =>
-                    remaining.Contains(candidate) &&
-                    Program.GetPredecessors(Targets[candidate])
-                        .All(completed.Contains));
+            definitionsByTarget.Add(Targets[definition], definition);
+        }
 
-            if (target is null)
-            {
-                throw new InvalidOperationException(
-                    "The activated target definitions cannot be ordered.");
-            }
+        foreach (var linkedTarget in
+            Program.GetRequestOrder(Targets[requestedTarget]))
+        {
+            var target = definitionsByTarget[linkedTarget];
 
             foreach (var output in target.Outputs)
             {
@@ -57,33 +48,14 @@ public sealed partial class BuildLinkResult
                     continue;
                 }
 
-                var linkedTarget = Targets[target];
                 var outputIndex = IndexOfReference(
                     linkedTarget.Body.Outputs,
                     output.Value);
                 state[output.Location] = linkedTarget.Outputs[outputIndex];
             }
-
-            completed.Add(Targets[target]);
-            remaining.Remove(target);
         }
 
         return state;
-
-        void Activate(TargetDefinition target)
-        {
-            if (!activated.Add(target))
-            {
-                return;
-            }
-
-            foreach (var referencedTarget in
-                _definition.GetPrelude(target)
-                    .Concat(_definition.GetEpilogue(target)))
-            {
-                Activate(referencedTarget);
-            }
-        }
 
         static int IndexOfReference(
             IReadOnlyList<Value> values,

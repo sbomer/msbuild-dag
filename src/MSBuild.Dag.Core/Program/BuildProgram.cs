@@ -22,6 +22,15 @@ public sealed partial class BuildProgram
         IReadOnlyList<Target> targets,
         IReadOnlyDictionary<Value, object?> initialValues,
         IReadOnlyList<Value> inputs)
+        : this(targets, initialValues, inputs, orderPredecessors: null)
+    {
+    }
+
+    internal BuildProgram(
+        IReadOnlyList<Target> targets,
+        IReadOnlyDictionary<Value, object?> initialValues,
+        IReadOnlyList<Value> inputs,
+        IReadOnlyDictionary<Target, IReadOnlySet<Target>>? orderPredecessors)
     {
         ArgumentNullException.ThrowIfNull(targets);
         ArgumentNullException.ThrowIfNull(initialValues);
@@ -49,7 +58,7 @@ public sealed partial class BuildProgram
         ValidateInputs(operationOwners);
         ValidateTargetReferences();
         ValidateCrossTargetConnections(operationOwners);
-        BuildPrecedence();
+        BuildPrecedence(orderPredecessors);
         EnsureAcyclic();
     }
 

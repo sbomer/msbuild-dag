@@ -122,6 +122,10 @@ public sealed class MSBuildProjectTranslatorTests
     {
         var result = TranslateAsset("Orchestration.proj", "Build");
         var build = result.Targets["Build"];
+        var beforeOne = result.Targets["BeforeOne"];
+        var beforeTwo = result.Targets["BeforeTwo"];
+        var afterOne = result.Targets["AfterOne"];
+        var afterTwo = result.Targets["AfterTwo"];
 
         Assert.Equal(
             [
@@ -137,6 +141,18 @@ public sealed class MSBuildProjectTranslatorTests
                 result.Targets["AfterTwo"],
             ],
             build.Epilogue);
+        Assert.DoesNotContain(
+            beforeOne,
+            result.Program.GetOrderPredecessors(beforeTwo));
+        Assert.DoesNotContain(
+            beforeTwo,
+            result.Program.GetOrderPredecessors(beforeOne));
+        Assert.DoesNotContain(
+            afterOne,
+            result.Program.GetOrderPredecessors(afterTwo));
+        Assert.DoesNotContain(
+            afterTwo,
+            result.Program.GetOrderPredecessors(afterOne));
     }
 
     [Fact]
@@ -152,6 +168,30 @@ public sealed class MSBuildProjectTranslatorTests
 
         Assert.Contains("Target ordering is contradictory", exception.Message);
         Assert.IsType<TargetOrderCycleException>(exception.InnerException);
+    }
+
+    [Fact]
+    public async Task KeepsIndependentBeforeHooksOutOfGlobalOrder()
+    {
+        var result = TranslateAsset("NestedBeforeTargets.proj", "Anchor");
+        var anchor = result.Targets["Anchor"];
+        var a = result.Targets["A"];
+        var b = result.Targets["B"];
+        var messages = new List<string>();
+
+        Assert.Contains(a, result.Program.GetOrderPredecessors(anchor));
+        Assert.Contains(b, result.Program.GetOrderPredecessors(anchor));
+        Assert.Contains(b, result.Program.GetOrderPredecessors(a));
+
+        await new BuildProgramExecutor(
+            result.Program,
+            new ValueStore(),
+            CreateEvaluator(
+                onMessage: (operation, values) =>
+                    messages.Add(values.Get(operation.Text))).EvaluateAsync)
+            .ExecuteAsync(anchor);
+
+        Assert.Equal(["B", "A", "Anchor"], messages);
     }
 
     [Fact]

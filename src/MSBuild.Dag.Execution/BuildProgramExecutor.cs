@@ -47,66 +47,14 @@ public sealed class BuildProgramExecutor
                 nameof(requestedTarget));
         }
 
-        var activated = GetActivatedTargets(requestedTarget);
+        var requestOrder = _program.GetRequestOrder(
+            requestedTarget,
+            _completed);
 
-        foreach (var target in activated)
+        foreach (var target in requestOrder)
         {
-            foreach (var predecessor in _program.GetPredecessors(target))
-            {
-                if (!_completed.Contains(predecessor) &&
-                    !activated.Contains(predecessor))
-                {
-                    throw new InvalidOperationException(
-                        "The target request violates the program order because " +
-                        "an unfinished predecessor was not activated.");
-                }
-            }
-        }
-
-        var remaining = new HashSet<Target>(
-            activated.Where(target => !_completed.Contains(target)),
-            ReferenceEqualityComparer.Instance);
-
-        while (remaining.Count > 0)
-        {
-            var target = _program.Targets.FirstOrDefault(
-                candidate =>
-                    remaining.Contains(candidate) &&
-                    _program.GetPredecessors(candidate)
-                        .All(_completed.Contains));
-
-            if (target is null)
-            {
-                throw new InvalidOperationException(
-                    "The activated targets cannot be scheduled in program order.");
-            }
-
             await ExecuteBodyAsync(target);
             _completed.Add(target);
-            remaining.Remove(target);
-        }
-
-        HashSet<Target> GetActivatedTargets(Target target)
-        {
-            var result = new HashSet<Target>(
-                ReferenceEqualityComparer.Instance);
-
-            Add(target);
-            return result;
-
-            void Add(Target current)
-            {
-                if (_completed.Contains(current) || !result.Add(current))
-                {
-                    return;
-                }
-
-                foreach (var referencedTarget in
-                    current.Prelude.Concat(current.Epilogue))
-                {
-                    Add(referencedTarget);
-                }
-            }
         }
 
         async ValueTask ExecuteBodyAsync(Target target)

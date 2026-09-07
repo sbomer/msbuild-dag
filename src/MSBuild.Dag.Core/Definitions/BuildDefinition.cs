@@ -8,6 +8,9 @@ public sealed partial class BuildDefinition
     private readonly IReadOnlyDictionary<
         TargetDefinition,
         IReadOnlyList<TargetDefinition>> _epilogues;
+    private readonly IReadOnlyDictionary<
+        TargetDefinition,
+        IReadOnlyList<TargetDefinition>> _orderPredecessors;
 
     public BuildDefinition(
         EvaluationSnapshot evaluation,
@@ -57,6 +60,29 @@ public sealed partial class BuildDefinition
         IReadOnlyDictionary<
             TargetDefinition,
             IReadOnlyList<TargetDefinition>> epilogues)
+        : this(
+            evaluation,
+            inputs,
+            targets,
+            preludes,
+            epilogues,
+            orderPredecessors: null)
+    {
+    }
+
+    public BuildDefinition(
+        EvaluationSnapshot evaluation,
+        IReadOnlyList<Location> inputs,
+        IReadOnlyList<TargetDefinition> targets,
+        IReadOnlyDictionary<
+            TargetDefinition,
+            IReadOnlyList<TargetDefinition>> preludes,
+        IReadOnlyDictionary<
+            TargetDefinition,
+            IReadOnlyList<TargetDefinition>> epilogues,
+        IReadOnlyDictionary<
+            TargetDefinition,
+            IReadOnlyList<TargetDefinition>>? orderPredecessors)
     {
         ArgumentNullException.ThrowIfNull(evaluation);
         ArgumentNullException.ThrowIfNull(inputs);
@@ -69,6 +95,13 @@ public sealed partial class BuildDefinition
         Targets = targets.ToArray();
         _preludes = CopyOrchestration(preludes, nameof(preludes));
         _epilogues = CopyOrchestration(epilogues, nameof(epilogues));
+        _orderPredecessors = CopyOrchestration(
+            orderPredecessors ??
+                TargetOrder.CreateImmediatePredecessors(
+                    Targets,
+                    GetPrelude,
+                    GetEpilogue),
+            nameof(orderPredecessors));
     }
 
     public EvaluationSnapshot Evaluation { get; }
@@ -84,6 +117,10 @@ public sealed partial class BuildDefinition
     internal IReadOnlyList<TargetDefinition> GetEpilogue(
         TargetDefinition target) =>
         _epilogues[target];
+
+    internal IReadOnlyList<TargetDefinition> GetOrderPredecessors(
+        TargetDefinition target) =>
+        _orderPredecessors[target];
 
     private static IReadOnlyList<Location> CopyInputs(
         IReadOnlyList<Location> inputs,
