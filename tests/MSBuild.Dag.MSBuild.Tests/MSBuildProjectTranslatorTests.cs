@@ -179,7 +179,7 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Fact]
-    public void SdkStyleStillReportsRemainingTargetOrderingContradictions()
+    public void SdkStyleDoesNotFailOnConditionalTargetOrdering()
     {
         var projectPath = Path.Combine(
             AppContext.BaseDirectory,
@@ -189,9 +189,9 @@ public sealed class MSBuildProjectTranslatorTests
         var exception = Assert.Throws<InvalidOperationException>(
             () => new MSBuildProjectTranslator().Translate(projectPath, "Build"));
 
-        Assert.Contains("Target ordering is contradictory", exception.Message);
-        Assert.DoesNotContain("ResolveSDKReferences", exception.Message);
-        Assert.IsType<TargetOrderCycleException>(exception.InnerException);
+        Assert.Contains("conflicting access", exception.Message);
+        Assert.DoesNotContain("Target ordering is contradictory", exception.Message);
+        Assert.IsType<StateConflictException>(exception.InnerException);
     }
 
     [Fact]
@@ -369,13 +369,39 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Fact]
-    public void RejectsConditionalTargetOutputsUntilMergesAreModeled()
+    public async Task DefersConditionalTargetOutputsUntilExecution()
     {
-        var exception = Assert.Throws<NotSupportedException>(
-            () => TranslateAsset("ConditionalTargetOutput.proj", "Build"));
+        var warnings = new List<string>();
+        var projectPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "TestAssets",
+            "ConditionalTargetOutput.proj");
+        var result = new MSBuildProjectTranslator().Translate(
+            projectPath,
+            "Build",
+            warnings.Add);
+        var unsupported = Assert.Single(
+            result.Targets["MaybePrepare"].Body.Operations
+                .OfType<UnsupportedTargetOperation>());
 
         Assert.Contains(
-            "outputs in conditional target 'MaybePrepare'",
+            warnings,
+            warning => warning.Contains(
+                "Target 'MaybePrepare' cannot be fully translated: target " +
+                "conditions are not supported",
+                StringComparison.Ordinal));
+        Assert.Equal("target conditions are not supported", unsupported.Reason);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await new BuildProgramExecutor(
+                result.Program,
+                new ValueStore(),
+                CreateEvaluator().EvaluateAsync)
+                .ExecuteAsync(result.Targets["Build"]));
+
+        Assert.Contains(
+            "Target 'MaybePrepare' cannot execute: target conditions are not " +
+            "supported",
             exception.Message);
     }
 
@@ -910,21 +936,31 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Fact]
-    public void TranslatesTargetConditionToBooleanDataflow()
+    public async Task ConditionalTargetOmitsDependenciesButRetainsHooks()
     {
         var projectPath = Path.Combine(
             AppContext.BaseDirectory,
             "TestAssets",
-            "Condition.proj");
-
+            "ConditionalTargetDependencies.proj");
         var result = new MSBuildProjectTranslator().Translate(projectPath, "Build");
-        var graph = result.Targets["Build"].Body;
+        var conditional = result.Targets["Conditional"];
+        var build = result.Targets["Build"];
+        var messages = new List<string>();
 
-        var comparison = Assert.Single(
-            graph.Operations.OfType<NotEqualOperation<string>>());
+        Assert.Empty(conditional.Prelude);
+        Assert.Contains(conditional, build.Prelude);
 
-        Assert.Same(comparison.Result, result.TargetConditions["Build"]);
-        Assert.Single(graph.GetDependencies(comparison));
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await new BuildProgramExecutor(
+                result.Program,
+                new ValueStore(),
+                CreateEvaluator(
+                    onMessage: (operation, values) =>
+                        messages.Add(values.Get(operation.Text)))
+                    .EvaluateAsync)
+                .ExecuteAsync(build));
+
+        Assert.DoesNotContain("Dependency", messages);
     }
 
     [Fact]
@@ -1165,7 +1201,6 @@ public sealed class MSBuildProjectTranslatorTests
 
     [Theory]
     [InlineData("UnsupportedCondition.proj", true)]
-    [InlineData("GuardedUnsupportedCondition.proj", false)]
     public async Task DefersUnsupportedConditionUntilEvaluation(
         string assetName,
         bool shouldThrow)
@@ -1378,25 +1413,25 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Fact]
-    public async Task TranslatesNonemptyItemListTargetCondition()
+    public async Task ConditionalTargetConditionIsNotEvaluated()
     {
         var result = TranslateAsset("ItemListCondition.proj", "Build");
         var build = result.Targets["Build"];
-        var isEmpty = Assert.Single(
-            build.Body.Operations.OfType<IsEmptyOperation<MSBuildItem>>());
-        var not = Assert.Single(
-            build.Body.Operations.OfType<NotOperation>());
-        var values = new ValueStore();
+        var unsupported = Assert.Single(
+            build.Body.Operations.OfType<UnsupportedTargetOperation>());
 
-        await new BuildProgramExecutor(
-            result.Program,
-            values,
-            CreateEvaluator().EvaluateAsync)
-            .ExecuteAsync(build);
+        Assert.DoesNotContain(
+            build.Body.Operations,
+            operation => operation is IsEmptyOperation<MSBuildItem> or
+                NotOperation);
+        Assert.Equal("target conditions are not supported", unsupported.Reason);
 
-        Assert.Same(isEmpty.Result, not.Operand);
-        Assert.Same(not.Result, result.TargetConditions["Build"]);
-        Assert.True(values.Get(result.TargetConditions["Build"]));
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await new BuildProgramExecutor(
+                result.Program,
+                new ValueStore(),
+                CreateEvaluator().EvaluateAsync)
+                .ExecuteAsync(build));
     }
 
     [Fact]
@@ -2022,7 +2057,7 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Fact]
-    public async Task FalseTargetConditionPreventsTargetBodyExecution()
+    public async Task FalseTargetConditionStillFailsAsUnsupported()
     {
         var projectPath = Path.Combine(
             AppContext.BaseDirectory,
@@ -2034,14 +2069,17 @@ public sealed class MSBuildProjectTranslatorTests
             _ => compileExecuted = true);
         var values = new ValueStore();
 
-        await new BuildProgramExecutor(
-            result.Program,
-            values,
-            evaluator.EvaluateAsync)
-            .ExecuteAsync(result.Targets["Build"]);
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await new BuildProgramExecutor(
+                result.Program,
+                values,
+                evaluator.EvaluateAsync)
+                .ExecuteAsync(result.Targets["Build"]));
 
-        Assert.False(values.Get(result.TargetConditions["Build"]));
         Assert.False(compileExecuted);
+        Assert.Contains(
+            "target conditions are not supported",
+            exception.Message);
     }
 
     private static OperationEvaluator CreateEvaluator(

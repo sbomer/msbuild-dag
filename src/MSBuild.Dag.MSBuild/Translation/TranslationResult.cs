@@ -12,5 +12,4 @@ public sealed record TranslationResult(
     IReadOnlyDictionary<string, Value<FileContents?>> Files,
     Value<string>? IsRunningFromVisualStudio,
     IReadOnlyDictionary<Value, IReadOnlyList<ValueSymbol>> ValueSymbols,
-    IReadOnlyDictionary<string, Value<bool>> TargetConditions,
     IReadOnlyList<string> Warnings);

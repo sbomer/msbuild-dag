@@ -133,7 +133,10 @@ public sealed class MSBuildProjectTranslator
 
         var sourceTargets = projectInstance.Targets.Values.ToArray();
         var targetPropertyAssignments =
-            GetTargetPropertyAssignments(sourceTargets);
+            GetTargetPropertyAssignments(
+                sourceTargets
+                    .Where(target => string.IsNullOrWhiteSpace(target.Condition))
+                    .ToArray());
         var msbuildInvocations =
             new Dictionary<ProjectTaskInstance, PreparedMSBuildInvocation>(
                 ReferenceEqualityComparer.Instance);
@@ -161,27 +164,33 @@ public sealed class MSBuildProjectTranslator
         {
             TargetStateAccess access;
 
-            try
+            if (!string.IsNullOrWhiteSpace(target.Condition))
             {
-                access = GetTargetStateAccess(
-                    target,
-                    ResolveStaticFilePath,
-                    PrepareMSBuildInvocation);
-            }
-            catch (DeferredTargetTranslationException exception)
-            {
-                var warning =
+                const string reason = "target conditions are not supported";
+                ReportWarning(
                     $"Target '{target.Name}' cannot be fully translated: " +
-                    $"{exception.Message} The target will fail if executed.";
-                ReportWarning(warning);
-                deferredTargets.Add(target, exception.Message);
-                access = new TargetStateAccess(
-                    new HashSet<string>(),
-                    new HashSet<string>(),
-                    new HashSet<string>(),
-                    new HashSet<string>(),
-                    new HashSet<string>(),
-                    false);
+                    $"{reason}. The target will fail if executed.");
+                deferredTargets.Add(target, reason);
+                access = EmptyTargetStateAccess();
+            }
+            else
+            {
+                try
+                {
+                    access = GetTargetStateAccess(
+                        target,
+                        ResolveStaticFilePath,
+                        PrepareMSBuildInvocation);
+                }
+                catch (DeferredTargetTranslationException exception)
+                {
+                    var warning =
+                        $"Target '{target.Name}' cannot be fully translated: " +
+                        $"{exception.Message} The target will fail if executed.";
+                    ReportWarning(warning);
+                    deferredTargets.Add(target, exception.Message);
+                    access = EmptyTargetStateAccess();
+                }
             }
 
             stateAccesses.Add(target, access);
@@ -229,8 +238,6 @@ public sealed class MSBuildProjectTranslator
         var evaluation = new EvaluationSnapshot(evaluatedValues);
         var targetBodies = new Dictionary<MSBuildTarget, TargetBody>(
             ReferenceEqualityComparer.Instance);
-        var targetConditions = new Dictionary<string, Value<bool>>(
-            StringComparer.OrdinalIgnoreCase);
 
         foreach (var target in sourceTargets)
         {
@@ -297,16 +304,6 @@ public sealed class MSBuildProjectTranslator
             {
                 valueSymbols.Add(read.Value, $"@({name})");
             }
-            Value<bool>? targetCondition = null;
-
-            if (!string.IsNullOrWhiteSpace(target.Condition))
-            {
-                targetCondition = context.TranslateCondition(
-                    target.Condition,
-                    target.Location.File);
-                targetConditions.Add(target.Name, targetCondition);
-                context.SetTargetGuard(context.CreateGuard(targetCondition));
-            }
 
             foreach (var missingDependency in links.MissingDependencies
                 .Where(missing => ReferenceEquals(
@@ -359,25 +356,11 @@ public sealed class MSBuildProjectTranslator
                         .. access.WriteProperties.Select(
                             name => new TargetOutput<string>(
                                 propertyLocations[name],
-                                context.Properties[name])
-                            {
-                                IsConditional =
-                                    !string.IsNullOrWhiteSpace(target.Condition),
-                            }),
+                                context.Properties[name])),
                         .. access.WriteItems.Select(
                             name => new TargetOutput<IReadOnlyList<MSBuildItem>>(
                                 itemLocations[name],
-                                context.Items[name])
-                            {
-                                IsConditional =
-                                    !string.IsNullOrWhiteSpace(target.Condition),
-                            }),
-                        .. targetCondition is null
-                            ? []
-                            : new TargetOutput[]
-                            {
-                                new(targetCondition),
-                            },
+                                context.Items[name])),
                     ],
                     operationGraph));
         }
@@ -604,7 +587,6 @@ public sealed class MSBuildProjectTranslator
             files,
             isRunningFromVisualStudio,
             valueSymbols.Build(),
-            targetConditions,
             warnings);
 
         void ReportWarning(string warning)
@@ -612,6 +594,15 @@ public sealed class MSBuildProjectTranslator
             warnings.Add(warning);
             reportWarning?.Invoke(warning);
         }
+
+        static TargetStateAccess EmptyTargetStateAccess() =>
+            new(
+                new HashSet<string>(),
+                new HashSet<string>(),
+                new HashSet<string>(),
+                new HashSet<string>(),
+                new HashSet<string>(),
+                false);
 
         string ResolveStaticFilePath(
             string expression,
@@ -955,14 +946,16 @@ public sealed class MSBuildProjectTranslator
         {
             preludes.Add(
                 target,
-                ResolveDependsOnTargetList(
-                    target,
-                    ExpandDependsOnTargets(
-                        project,
+                string.IsNullOrWhiteSpace(target.Condition)
+                    ? ResolveDependsOnTargetList(
                         target,
-                        propertyAssignments),
-                    targetsByName,
-                    missingDependencies));
+                        ExpandDependsOnTargets(
+                            project,
+                            target,
+                            propertyAssignments),
+                        targetsByName,
+                        missingDependencies)
+                    : []);
             beforeTargets.Add(target, []);
             afterTargets.Add(target, []);
         }
@@ -1038,11 +1031,6 @@ public sealed class MSBuildProjectTranslator
             StringComparer.OrdinalIgnoreCase);
         var readFiles = new HashSet<string>(StringComparer.Ordinal);
         var readsIsRunningFromVisualStudio = false;
-
-        if (!string.IsNullOrWhiteSpace(target.Condition))
-        {
-            AddConditionRead(target.Condition, target.Location.File);
-        }
 
         foreach (var child in target.Children)
         {

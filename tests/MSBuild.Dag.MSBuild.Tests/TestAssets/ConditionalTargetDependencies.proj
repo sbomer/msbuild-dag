@@ -1,0 +1,16 @@
+<Project>
+  <Target Name="Dependency">
+    <Message Importance="High" Text="Dependency" />
+  </Target>
+
+  <Target Name="Conditional"
+          Condition="'true' == 'true'"
+          DependsOnTargets="Dependency"
+          BeforeTargets="Build">
+    <Message Importance="High" Text="Conditional" />
+  </Target>
+
+  <Target Name="Build">
+    <Message Importance="High" Text="Build" />
+  </Target>
+</Project>

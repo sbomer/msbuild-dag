@@ -128,11 +128,6 @@ internal static class CliRunner
                 $"  @({item.Key}) = {FormatItems(values, item.Value)}");
         }
 
-        foreach (var condition in result.TargetConditions)
-        {
-            Console.WriteLine(
-                $"  Condition({condition.Key}) = {Format(values, condition.Value)}");
-        }
     }
 
     private static string Format<T>(ValueStore values, Value<T> value) =>

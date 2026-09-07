@@ -207,21 +207,21 @@ target graphs without changing semantics.
 
 ## Scope
 
-Target conditions must be resolved before constructing the target DAG. The
-ordering proof assumes that every target and orchestration edge in the Core
-model is unconditional.
+The Core ordering model assumes every target and orchestration edge is
+unconditional. The MSBuild frontend therefore does not model target-level
+`Condition` attributes.
 
-A frontend may specialize a target condition using the fixed evaluation state,
-but it must lower both outcomes with MSBuild semantics. A false target
-condition suppresses the target body and its `DependsOnTargets`, while
-registered `BeforeTargets` and `AfterTargets` remain active. If the condition
-can change during target execution or cannot be resolved statically, the
-frontend must reject the project rather than place the unresolved condition in
-this model.
+A conditional target is lowered to an unsupported target with no body state,
+outputs, or `DependsOnTargets`. Translation emits a warning, and activating the
+target throws unconditionally at runtime. Its statically evaluated
+`BeforeTargets` and `AfterTargets` registrations are retained so a request
+cannot silently bypass the unsupported target.
 
-Consequently, the target DAG and request planner do not reevaluate target
-conditions. Their correctness claim applies only after conditional target
-structure has been eliminated or specialized into an unconditional graph.
+This policy is deliberately conservative. It does not evaluate even a
+statically false target condition, and it does not model skipped-target
+reevaluation or conditional dependency activation. Unreachable conditional
+targets do not prevent graph construction, while any request that activates one
+fails before that target can produce state changes.
 
 The current model keeps dependency-to-owner and hook-to-anchor constraints in
 one DAG, but does not order independent dependency or hook siblings.
