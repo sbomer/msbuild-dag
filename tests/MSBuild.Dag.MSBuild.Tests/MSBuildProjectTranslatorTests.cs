@@ -836,6 +836,41 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Fact]
+    public async Task SeparatesReusableWorkFromAfterTargetRegistration()
+    {
+        var result = TranslateAsset("SplitAfterTargetWork.proj", "Compute");
+        var handleConflicts = result.Targets["HandleConflicts"];
+        var bundle = result.Targets["Bundle"];
+        var compute = result.Targets["Compute"];
+        var afterCompute = result.Targets["HandleConflictsAfterCompute"];
+        var messages = new List<string>();
+
+        Assert.Contains(
+            handleConflicts,
+            result.Program.GetOrderPredecessors(bundle));
+        Assert.Contains(bundle, result.Program.GetOrderPredecessors(compute));
+        Assert.Contains(compute, result.Program.GetOrderPredecessors(afterCompute));
+
+        await new BuildProgramExecutor(
+            result.Program,
+            new ValueStore(),
+            CreateEvaluator(
+                onMessage: (operation, values) =>
+                    messages.Add(values.Get(operation.Text)))
+                .EvaluateAsync)
+            .ExecuteAsync(compute);
+
+        Assert.Equal(
+            [
+                "HandleConflicts",
+                "Bundle",
+                "Compute",
+                "HandleConflictsAfterCompute",
+            ],
+            messages);
+    }
+
+    [Fact]
     public void RejectsRequestWhoseActivationOrderConflictsWithAfterTarget()
     {
         var result = TranslateAsset("ConflictingAfterOrder.proj", "B");

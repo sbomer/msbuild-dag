@@ -1,0 +1,25 @@
+<Project>
+  <Import Project="$(MSBuildDagRuntimeRoot)/src/tasks/Crossgen2Tasks/Microsoft.NET.CrossGen.targets" />
+
+  <Target Name="_HandleFileConflictsForPublish"
+          Condition="'$(ErrorOnDuplicatePublishOutputFiles)' != 'false'">
+    <CheckForDuplicateItemMetadata
+      Items="@(ResolvedFileToPublish->Distinct())"
+      MetadataName="RelativePath">
+      <Output TaskParameter="DuplicatesExist"
+              PropertyName="_ResolvedFileToPublishContainsDuplicates" />
+      <Output TaskParameter="DuplicateItems"
+              ItemName="_ResolvedFileToPublishDuplicatedItems" />
+    </CheckForDuplicateItemMetadata>
+
+    <NETSdkError
+      Condition="'$(_ResolvedFileToPublishContainsDuplicates)' == 'true'"
+      ResourceName="DuplicatePublishOutputFiles"
+      FormatArguments="@(_ResolvedFileToPublishDuplicatedItems, ', ')" />
+  </Target>
+
+  <Target Name="_HandleFileConflictsForPublishAfterCompute"
+          AfterTargets="ComputeFilesToPublish"
+          DependsOnTargets="_HandleFileConflictsForPublish"
+          Condition="'$(ErrorOnDuplicatePublishOutputFiles)' != 'false'" />
+</Project>

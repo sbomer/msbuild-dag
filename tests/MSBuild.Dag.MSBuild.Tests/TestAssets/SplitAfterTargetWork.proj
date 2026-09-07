@@ -1,0 +1,21 @@
+<Project>
+  <Target Name="HandleConflicts">
+    <Message Importance="High" Text="HandleConflicts" />
+  </Target>
+
+  <Target Name="HandleConflictsAfterCompute"
+          AfterTargets="Compute"
+          DependsOnTargets="HandleConflicts">
+    <Message Importance="High" Text="HandleConflictsAfterCompute" />
+  </Target>
+
+  <Target Name="Bundle"
+          DependsOnTargets="HandleConflicts">
+    <Message Importance="High" Text="Bundle" />
+  </Target>
+
+  <Target Name="Compute"
+          DependsOnTargets="Bundle">
+    <Message Importance="High" Text="Compute" />
+  </Target>
+</Project>

@@ -11,7 +11,7 @@ arcade_version="$(
 )"
 package_root="${NUGET_PACKAGES:-$HOME/.nuget/packages}"
 toolset_project="$runtime_root/artifacts/toolset/$arcade_version/Build.proj"
-crossgen_targets="$runtime_root/src/tasks/Crossgen2Tasks/Microsoft.NET.CrossGen.targets"
+runtime_overrides="$repo_root/runtime-overrides.targets"
 
 if [[ ! -f "$toolset_project" ]]; then
   cached_toolset="$package_root/microsoft.dotnet.arcade.sdk/$arcade_version/toolset"
@@ -26,7 +26,8 @@ if [[ ! -f "$toolset_project" ]]; then
   cp -R "$cached_toolset/." "$(dirname "$toolset_project")"
 fi
 
-export AfterMicrosoftNETSdkTargets="${AfterMicrosoftNETSdkTargets:-$crossgen_targets}"
+export MSBuildDagRuntimeRoot="$runtime_root"
+export AfterMicrosoftNETSdkTargets="${AfterMicrosoftNETSdkTargets:-$runtime_overrides}"
 
 exec dotnet run \
   --project "$repo_root/src/MSBuild.Dag.Cli/MSBuild.Dag.Cli.csproj" \
