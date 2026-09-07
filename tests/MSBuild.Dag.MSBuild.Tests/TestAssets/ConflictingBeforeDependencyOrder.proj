@@ -1,0 +1,15 @@
+<Project>
+  <Target Name="Early"
+          BeforeTargets="A">
+    <Message Importance="High" Text="Early" />
+  </Target>
+
+  <Target Name="A">
+    <Message Importance="High" Text="A" />
+  </Target>
+
+  <Target Name="Build"
+          DependsOnTargets="A;Early">
+    <Message Importance="High" Text="Build" />
+  </Target>
+</Project>

@@ -433,20 +433,12 @@ public sealed class MSBuildProjectTranslator
 
         foreach (var sourceTarget in sourceTargets)
         {
-            MSBuildTarget? previous = null;
-
-            foreach (var current in
-                links.Dependencies[sourceTarget].Append(sourceTarget))
+            foreach (var dependency in links.Dependencies[sourceTarget])
             {
-                if (previous is not null)
-                {
-                    AddDefinitionPredecessor(
-                        definitionOrderPredecessors[
-                            createdDefinitions[current]],
-                        createdDefinitions[previous]);
-                }
-
-                previous = current;
+                AddDefinitionPredecessor(
+                    definitionOrderPredecessors[
+                        createdDefinitions[sourceTarget]],
+                    createdDefinitions[dependency]);
             }
 
             foreach (var beforeTarget in links.BeforeTargets[sourceTarget])

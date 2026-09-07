@@ -4,9 +4,9 @@ The compiler derives one global target DAG directly from the evaluated target
 definitions. The DAG does not depend on the order of
 `BuildDefinition.Targets`, and target requests never add or remove its edges.
 
-This model is intentionally stricter than MSBuild. A request is accepted only
-when MSBuild's structural execution order is already represented by the global
-DAG. Otherwise the request is rejected before any target body executes.
+A request is accepted only when MSBuild's structural execution order is a
+linear extension of the global DAG. Otherwise the request is rejected before
+any target body executes.
 
 ## Definition-derived order
 
@@ -26,15 +26,19 @@ A BeforeTargets="B"     => A < B
 A AfterTargets="B"      => B < A
 ```
 
-An ordered `DependsOnTargets` list contributes its list order:
+Entries in one `DependsOnTargets` list are independent global predecessors:
 
 ```text
-A DependsOnTargets="B;C" => B < C < A
+A DependsOnTargets="B;C" => B < A and C < A
 ```
 
-Multiple targets registered before the same anchor each precede the anchor, but
-remain incomparable with one another unless another declaration relates them.
-The same applies to multiple after-targets:
+`B` and `C` remain incomparable in the global DAG. Their evaluated list order
+is retained in activation metadata, so an MSBuild request for `A` still requests
+`B` before `C`.
+
+Multiple targets registered before the same anchor likewise each precede the
+anchor, but remain incomparable with one another unless another declaration
+relates them. The same applies to multiple after-targets:
 
 ```text
 A BeforeTargets="Build" => A < Build
@@ -43,11 +47,11 @@ B BeforeTargets="Build" => B < Build
 A and B remain incomparable.
 ```
 
-The activation model still retains MSBuild's evaluated registration order.
-`Prelude` contains ordered dependencies followed by registered before-targets,
-and `Epilogue` contains registered after-targets. This order is used to plan an
-individual request, but it is not added to the global DAG between otherwise
-independent hooks.
+The activation model retains MSBuild's evaluated order. `Prelude` contains
+ordered dependencies followed by registered before-targets, and `Epilogue`
+contains registered after-targets. This order is used to plan an individual
+request, but it is not added to the global DAG between otherwise independent
+dependencies or hooks.
 
 ## Contradictions
 
@@ -72,6 +76,19 @@ MSBuild may execute some requests successfully because its target-once cache
 makes one occurrence a no-op. The strict model deliberately rejects the
 definition instead of making request-dependent exceptions or choosing one
 direction with a tie-breaker.
+
+Ordered dependency siblings do not create such contradictions. For example:
+
+```xml
+<Target Name="Early" BeforeTargets="A" />
+<Target Name="A" />
+<Target Name="Build" DependsOnTargets="A;Early" />
+```
+
+The global DAG contains `Early < A`, `A < Build`, and `Early < Build`, but not
+`A < Early`. The activation planner requests `A`, first executes its `Early`
+hook, and treats the later explicit request for `Early` as a target-once no-op.
+The accepted body order is therefore `Early, A, Build`.
 
 ## Request validation
 
@@ -103,20 +120,28 @@ planner, while rejected requests execute no bodies.
 `BuildProgram` intentionally retains two different structures:
 
 1. The global precedence DAG contains only mandatory,
-   definition-order-independent constraints. Ordered `DependsOnTargets`
-   contributes a chain; each before-target precedes its anchor; each
-   after-target follows its anchor. Independent hook siblings remain
+   definition-order-independent constraints. Each dependency precedes its
+   owning target, each before-target precedes its anchor, and each after-target
+   follows its anchor. Independent dependency and hook siblings remain
    incomparable.
 2. Each target's ordered `Prelude` and `Epilogue` retain the evaluated MSBuild
    activation order, including registration order between sibling hooks.
 
 The global DAG is not a complete execution schedule. An arbitrary topological
-ordering may reorder incomparable hooks differently from MSBuild and must not
-be used directly for execution. `BuildProgram.GetRequestOrder` structurally
-plans the MSBuild order for the requested target and current completed set,
-verifies that it is a linear extension of the global DAG, and returns that
-validated order. `BuildProgramExecutor` executes this order rather than
-selecting an arbitrary topological ordering.
+ordering may reorder incomparable dependencies or hooks differently from
+MSBuild and must not be used directly for execution.
+`BuildProgram.GetRequestOrder` structurally plans the exact MSBuild order for
+the requested target and current completed set, verifies that it is a linear
+extension of the global DAG, and returns that validated order.
+`BuildProgramExecutor` executes this order rather than selecting an arbitrary
+topological ordering.
+
+Removing dependency-sibling edges accepts more evaluated definitions and can
+only remove global precedence cycles. It also makes more arbitrary
+topological orders possible, including orders MSBuild would not choose.
+Those orders are not accepted as execution requests: execution always starts
+from the retained activation metadata, and the resulting MSBuild order must
+still satisfy every mandatory DAG predecessor.
 
 Consequently:
 
@@ -158,8 +183,8 @@ The result is:
   unique;
 - **definition-list independent:** collecting edges is a set union, so
   permuting the top-level target collection cannot change the relation;
-- **structural:** every immediate edge comes from an ordered dependency list or
-  a hook-to-anchor relationship;
+- **structural:** every immediate edge relates a dependency or hook to its
+  owning target or anchor;
 - **minimal:** the relation contains only immediate structural edges and their
   transitive consequences;
 - **partially ordered:** disconnected targets remain incomparable.
@@ -198,7 +223,5 @@ Consequently, the target DAG and request planner do not reevaluate target
 conditions. Their correctness claim applies only after conditional target
 structure has been eliminated or specialized into an unconditional graph.
 
-A possible future refinement is to make `DependsOnTargets` the hard primary
-DAG and represent Before/After constraints in a weaker secondary relation.
-The current model keeps all three in one DAG, but does not order independent
-hook siblings.
+The current model keeps dependency-to-owner and hook-to-anchor constraints in
+one DAG, but does not order independent dependency or hook siblings.

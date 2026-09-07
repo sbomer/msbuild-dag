@@ -31,9 +31,7 @@ public sealed class MSBuildProjectTranslatorTests
         Assert.Contains(prepare, result.Program.GetPredecessors(build));
         Assert.Contains(collectSources, result.Program.GetPredecessors(build));
         Assert.Empty(result.Program.GetPredecessors(prepare));
-        Assert.Equal(
-            [prepare],
-            result.Program.GetPredecessors(collectSources));
+        Assert.Empty(result.Program.GetPredecessors(collectSources));
         Assert.Equal(
             [build],
             result.Program.GetPredecessors(afterBuild));
@@ -122,6 +120,8 @@ public sealed class MSBuildProjectTranslatorTests
     {
         var result = TranslateAsset("Orchestration.proj", "Build");
         var build = result.Targets["Build"];
+        var dependencyOne = result.Targets["DependencyOne"];
+        var dependencyTwo = result.Targets["DependencyTwo"];
         var beforeOne = result.Targets["BeforeOne"];
         var beforeTwo = result.Targets["BeforeTwo"];
         var afterOne = result.Targets["AfterOne"];
@@ -141,6 +141,18 @@ public sealed class MSBuildProjectTranslatorTests
                 result.Targets["AfterTwo"],
             ],
             build.Epilogue);
+        Assert.Contains(
+            dependencyOne,
+            result.Program.GetOrderPredecessors(build));
+        Assert.Contains(
+            dependencyTwo,
+            result.Program.GetOrderPredecessors(build));
+        Assert.DoesNotContain(
+            dependencyOne,
+            result.Program.GetOrderPredecessors(dependencyTwo));
+        Assert.DoesNotContain(
+            dependencyTwo,
+            result.Program.GetOrderPredecessors(dependencyOne));
         Assert.DoesNotContain(
             beforeOne,
             result.Program.GetOrderPredecessors(beforeTwo));
@@ -153,10 +165,21 @@ public sealed class MSBuildProjectTranslatorTests
         Assert.DoesNotContain(
             afterTwo,
             result.Program.GetOrderPredecessors(afterOne));
+        Assert.Equal(
+            [
+                dependencyOne,
+                dependencyTwo,
+                beforeOne,
+                beforeTwo,
+                build,
+                afterOne,
+                afterTwo,
+            ],
+            result.Program.GetRequestOrder(build));
     }
 
     [Fact]
-    public void SdkStyleReferenceCycleReportsTargetOrderingContradiction()
+    public void SdkStyleStillReportsRemainingTargetOrderingContradictions()
     {
         var projectPath = Path.Combine(
             AppContext.BaseDirectory,
@@ -167,6 +190,7 @@ public sealed class MSBuildProjectTranslatorTests
             () => new MSBuildProjectTranslator().Translate(projectPath, "Build"));
 
         Assert.Contains("Target ordering is contradictory", exception.Message);
+        Assert.DoesNotContain("ResolveSDKReferences", exception.Message);
         Assert.IsType<TargetOrderCycleException>(exception.InnerException);
     }
 
@@ -812,13 +836,42 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Fact]
-    public void RejectsConflictingGlobalOrderFromAfterTargets()
+    public void RejectsRequestWhoseActivationOrderConflictsWithAfterTarget()
     {
+        var result = TranslateAsset("ConflictingAfterOrder.proj", "B");
         var exception = Assert.Throws<InvalidOperationException>(
-            () => TranslateAsset("ConflictingAfterOrder.proj", "Build"));
+            () => result.Program.GetRequestOrder(result.Targets["Build"]));
 
-        Assert.Contains("ordering is contradictory", exception.Message);
-        Assert.Contains("'A' -> 'B' -> 'A'", exception.Message);
+        Assert.Contains("violates the program order", exception.Message);
+    }
+
+    [Fact]
+    public async Task AcceptsBeforeHookAlsoRequestedLaterByOrderedDependencies()
+    {
+        var result = TranslateAsset(
+            "ConflictingBeforeDependencyOrder.proj",
+            "Build");
+        var early = result.Targets["Early"];
+        var a = result.Targets["A"];
+        var build = result.Targets["Build"];
+        var messages = new List<string>();
+
+        Assert.Contains(early, result.Program.GetOrderPredecessors(a));
+        Assert.Contains(a, result.Program.GetOrderPredecessors(build));
+        Assert.DoesNotContain(
+            a,
+            result.Program.GetOrderPredecessors(early));
+
+        await new BuildProgramExecutor(
+            result.Program,
+            new ValueStore(),
+            CreateEvaluator(
+                onMessage: (operation, values) =>
+                    messages.Add(values.Get(operation.Text)))
+                .EvaluateAsync)
+            .ExecuteAsync(build);
+
+        Assert.Equal(["Early", "A", "Build"], messages);
     }
 
     [Fact]
