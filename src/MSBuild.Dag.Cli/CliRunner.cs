@@ -11,17 +11,33 @@ internal static class CliRunner
 {
     public static async Task<int> RunAsync(string[] args)
     {
-        if (args.Length is < 1 or > 2 ||
-            args.Any(argument => argument.StartsWith('-')))
+        var render = true;
+        var positionalArguments = new List<string>(args.Length);
+
+        foreach (var argument in args)
+        {
+            if (argument == "--no-render")
+            {
+                render = false;
+            }
+            else
+            {
+                positionalArguments.Add(argument);
+            }
+        }
+
+        if (positionalArguments.Count is < 1 or > 2 ||
+            positionalArguments.Any(
+                argument => argument.StartsWith('-')))
         {
             Console.Error.WriteLine(
-                "Usage: MSBuild.Dag.Cli <project-path> [target]");
+                "Usage: MSBuild.Dag.Cli [--no-render] <project-path> [target]");
             return 1;
         }
 
-        var projectPath = Path.GetFullPath(args[0]);
-        var targetName = args.Length == 2
-            ? args[1]
+        var projectPath = Path.GetFullPath(positionalArguments[0]);
+        var targetName = positionalArguments.Count == 2
+            ? positionalArguments[1]
             : "Build";
 
         try
@@ -40,14 +56,17 @@ internal static class CliRunner
                 targetNames.Add(target, name);
             }
 
-            AsciiGraphWriter.Write(
-                result.Program,
-                Console.Out,
-                targetNames,
-                operation => GetOperationLabel(
-                    operation,
-                    result.ValueSymbols),
-                value => GetValueLabel(value, result.ValueSymbols));
+            if (render)
+            {
+                AsciiGraphWriter.Write(
+                    result.Program,
+                    Console.Out,
+                    targetNames,
+                    operation => GetOperationLabel(
+                        operation,
+                        result.ValueSymbols),
+                    value => GetValueLabel(value, result.ValueSymbols));
+            }
 
             var values = new ValueStore();
 

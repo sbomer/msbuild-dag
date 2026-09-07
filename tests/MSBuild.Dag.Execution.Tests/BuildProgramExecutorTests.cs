@@ -161,6 +161,111 @@ public sealed class BuildProgramExecutorTests
     }
 
     [Fact]
+    public async Task RejectsConflictWithPreviouslyCompletedTarget()
+    {
+        var executionOrder = new List<string>();
+        var writer = new Target(
+            new OperationGraph([new RecordingOperation("Writer")]));
+        var reader = new Target(
+            new OperationGraph([new RecordingOperation("Reader")]));
+        var program = new BuildProgram(
+            [writer, reader],
+            new Dictionary<Value, object?>(),
+            [],
+            [new TargetStateConflict(writer, reader, new Location<string>())]);
+        var executor = new BuildProgramExecutor(
+            program,
+            new ValueStore(),
+            (operation, _, _) =>
+            {
+                executionOrder.Add(((RecordingOperation)operation).Name);
+                return ValueTask.CompletedTask;
+            });
+
+        await executor.ExecuteAsync(writer);
+
+        await Assert.ThrowsAsync<RequestStateConflictException>(
+            async () => await executor.ExecuteAsync(reader));
+
+        Assert.Equal(["Writer"], executionOrder);
+    }
+
+    [Fact]
+    public async Task RejectsConflictingRequestBeforeExecutingAnyTarget()
+    {
+        var location = new Location<string>();
+        var writtenValue = new Value<string>();
+        var writer = new TargetDefinition(
+            [],
+            [],
+            [new TargetOutput<string>(location, writtenValue)],
+            new OperationGraph(
+            [
+                new RecordingOperation("Writer", [], [writtenValue]),
+            ]),
+            []);
+        var read = new TargetInput<string>(location);
+        var reader = new TargetDefinition(
+            [],
+            [read],
+            [],
+            new OperationGraph(
+            [
+                new RecordingOperation("Reader", [read.Value], []),
+            ]),
+            []);
+        var requested = new TargetDefinition(
+            [],
+            [],
+            [],
+            new OperationGraph([new RecordingOperation("Requested")]),
+            []);
+        var targets = new[] { writer, reader, requested };
+        var linked = new BuildDefinition(
+            new EvaluationSnapshot(
+                new Dictionary<Location, object?>
+                {
+                    [location] = "initial",
+                }),
+            [],
+            targets,
+            new Dictionary<TargetDefinition, IReadOnlyList<TargetDefinition>>
+            {
+                [writer] = [],
+                [reader] = [],
+                [requested] = [writer, reader],
+            },
+            new Dictionary<TargetDefinition, IReadOnlyList<TargetDefinition>>
+            {
+                [writer] = [],
+                [reader] = [],
+                [requested] = [],
+            },
+            new Dictionary<TargetDefinition, IReadOnlyList<TargetDefinition>>
+            {
+                [writer] = [],
+                [reader] = [],
+                [requested] = [writer, reader],
+            })
+            .Link();
+        var executionOrder = new List<string>();
+        var executor = new BuildProgramExecutor(
+            linked.Program,
+            new ValueStore(),
+            (operation, _, _) =>
+            {
+                executionOrder.Add(((RecordingOperation)operation).Name);
+                return ValueTask.CompletedTask;
+            });
+
+        await Assert.ThrowsAsync<RequestStateConflictException>(
+            async () =>
+                await executor.ExecuteAsync(linked.Targets[requested]));
+
+        Assert.Empty(executionOrder);
+    }
+
+    [Fact]
     public async Task ExecutesDependenciesBeforeConsumers()
     {
         var source = new Value<int>();
@@ -595,12 +700,15 @@ public sealed class BuildProgramExecutorTests
             [Result, OrderOutput!];
     }
 
-    private sealed class RecordingOperation(string name) : Operation
+    private sealed class RecordingOperation(
+        string name,
+        IReadOnlyList<Value>? inputs = null,
+        IReadOnlyList<Value>? outputs = null) : Operation
     {
         public string Name { get; } = name;
 
-        public override IReadOnlyList<Value> Inputs => [];
+        public override IReadOnlyList<Value> Inputs => inputs ?? [];
 
-        public override IReadOnlyList<Value> Outputs => [];
+        public override IReadOnlyList<Value> Outputs => outputs ?? [];
     }
 }

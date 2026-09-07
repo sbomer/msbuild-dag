@@ -469,18 +469,6 @@ public sealed class MSBuildProjectTranslator
         {
             linked = definition.Link();
         }
-        catch (StateConflictException exception)
-        {
-            var firstName = GetTargetName(exception.FirstTarget);
-            var secondName = GetTargetName(exception.SecondTarget);
-            var (kind, name) = GetStateName(exception.Location);
-
-            throw new InvalidOperationException(
-                $"Targets '{firstName}' and '{secondName}' have conflicting " +
-                $"access to {kind} '{name}' but are not ordered by the target " +
-                "program.",
-                exception);
-        }
         catch (ConditionalTargetOutputException exception)
         {
             throw Unsupported(
@@ -900,27 +888,6 @@ public sealed class MSBuildProjectTranslator
                 pair => ReferenceEquals(pair.Value, definition)).Key.Name;
         }
 
-        (string Kind, string Name) GetStateName(Location location)
-        {
-            foreach (var (name, propertyLocation) in propertyLocations)
-            {
-                if (ReferenceEquals(propertyLocation, location))
-                {
-                    return ("property", name);
-                }
-            }
-
-            foreach (var (name, itemLocation) in itemLocations)
-            {
-                if (ReferenceEquals(itemLocation, location))
-                {
-                    return ("item", name);
-                }
-            }
-
-            throw new InvalidOperationException(
-                "The state location is not part of the translated project.");
-        }
     }
 
     private static TargetLinks GetTargetLinks(

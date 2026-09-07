@@ -1,0 +1,21 @@
+<Project>
+  <PropertyGroup>
+    <BaseIntermediateOutputPath>obj/</BaseIntermediateOutputPath>
+    <InitialBaseIntermediateOutputPath>$(BaseIntermediateOutputPath)</InitialBaseIntermediateOutputPath>
+  </PropertyGroup>
+
+  <Target Name="CheckIntermediateOutputPath"
+          BeforeTargets="Build">
+    <Message
+      Condition="'$(InitialBaseIntermediateOutputPath)' != '$(BaseIntermediateOutputPath)'"
+      Text="BaseIntermediateOutputPath changed after evaluation." />
+  </Target>
+
+  <Target Name="RedirectIntermediateOutputPath">
+    <PropertyGroup>
+      <BaseIntermediateOutputPath>worker/</BaseIntermediateOutputPath>
+    </PropertyGroup>
+  </Target>
+
+  <Target Name="Build" />
+</Project>

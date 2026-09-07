@@ -186,12 +186,10 @@ public sealed class MSBuildProjectTranslatorTests
             "TestAssets",
             "SdkStyle.csproj");
 
-        var exception = Assert.Throws<InvalidOperationException>(
-            () => new MSBuildProjectTranslator().Translate(projectPath, "Build"));
+        var result = new MSBuildProjectTranslator()
+            .Translate(projectPath, "Build");
 
-        Assert.Contains("conflicting access", exception.Message);
-        Assert.DoesNotContain("Target ordering is contradictory", exception.Message);
-        Assert.IsType<StateConflictException>(exception.InnerException);
+        Assert.NotEmpty(result.Program.StateConflicts);
     }
 
     [Fact]
@@ -337,16 +335,80 @@ public sealed class MSBuildProjectTranslatorTests
     }
 
     [Fact]
-    public void RejectsUnorderedPropertyStateConflict()
+    public void AllowsRequestThatDoesNotActivateUnorderedWriter()
     {
-        var exception = Assert.Throws<InvalidOperationException>(
-            () => TranslateAsset("UnorderedStateConflict.proj", "Build"));
+        var result = TranslateAsset("UnorderedStateConflict.proj", "Build");
+        var conflict = Assert.Single(result.Program.StateConflicts);
 
-        Assert.Contains(
-            "Targets 'UnrelatedWriter' and 'Build' have conflicting access " +
-            "to property 'Configuration'",
-            exception.Message);
-        Assert.Contains("not ordered", exception.Message);
+        Assert.Same(result.Targets["UnrelatedWriter"], conflict.FirstTarget);
+        Assert.Same(result.Targets["Build"], conflict.SecondTarget);
+        Assert.Equal(
+            [result.Targets["Build"]],
+            result.Program.GetRequestOrder(result.Targets["Build"]));
+    }
+
+    [Fact]
+    public void RejectsRequestActivatingUnorderedPropertyStateConflict()
+    {
+        var result = TranslateAsset("RequestDependentStateOrder.proj", "Root");
+        var conflict = Assert.Single(result.Program.StateConflicts);
+
+        Assert.Same(result.Targets["Writer"], conflict.FirstTarget);
+        Assert.Same(result.Targets["Reader"], conflict.SecondTarget);
+        var exception = Assert.Throws<RequestStateConflictException>(
+            () => result.Program.GetRequestOrder(result.Targets["Root"]));
+        Assert.Same(conflict, exception.Conflict);
+        Assert.Equal(
+            [result.Targets["Writer"]],
+            result.Program.GetRequestOrder(result.Targets["Writer"]));
+        Assert.Equal(
+            [result.Targets["Reader"]],
+            result.Program.GetRequestOrder(result.Targets["Reader"]));
+    }
+
+    [Fact]
+    public void AllowsPathCheckWithoutActivatingUnorderedMutation()
+    {
+        var result = TranslateAsset(
+            "LateBaseIntermediateOutputPathMutation.proj",
+            "Build");
+        var conflict = Assert.Single(result.Program.StateConflicts);
+
+        Assert.Same(
+            result.Targets["CheckIntermediateOutputPath"],
+            conflict.FirstTarget);
+        Assert.Same(
+            result.Targets["RedirectIntermediateOutputPath"],
+            conflict.SecondTarget);
+        Assert.Equal(
+            [
+                result.Targets["CheckIntermediateOutputPath"],
+                result.Targets["Build"],
+            ],
+            result.Program.GetRequestOrder(result.Targets["Build"]));
+    }
+
+    [Fact]
+    public async Task AllowsExplicitOrderBetweenHookWriterAndDependencyReader()
+    {
+        var result = TranslateAsset("ExplicitlyOrderedState.proj", "Root");
+        var writer = result.Targets["Writer"];
+        var reader = result.Targets["Reader"];
+        var root = result.Targets["Root"];
+        var messages = new List<string>();
+
+        Assert.Contains(writer, result.Program.GetOrderPredecessors(reader));
+
+        await new BuildProgramExecutor(
+            result.Program,
+            new ValueStore(),
+            CreateEvaluator(
+                onMessage: (operation, values) =>
+                    messages.Add(values.Get(operation.Text)))
+                .EvaluateAsync)
+            .ExecuteAsync(root);
+
+        Assert.Equal(["updated"], messages);
     }
 
     [Fact]

@@ -115,6 +115,56 @@ The executor then runs the validated order directly. Therefore every accepted
 request has exactly the same target-body order as the structural MSBuild
 planner, while rejected requests execute no bodies.
 
+## State conflicts and request legality
+
+The build definition may contain unrelated target pipelines that access the
+same property, item, or other modeled state location. Unordered read/read
+access is harmless. If at least one access writes, however, executing both
+targets would make the observed value depend on request order rather than the
+global target DAG.
+
+Such a definition is retained. Linking records a fixed
+`TargetStateConflict` for each unordered conflicting target pair and location:
+
+```text
+global dataflow:
+    initial State ----------------> Reader
+    initial State -> Writer output
+
+request constraint:
+    Conflict(Writer, Reader, State)
+```
+
+The writer's output is not wired into the reader merely because one request
+might list the writer first. Since the target DAG does not make the writer a
+predecessor, the reader keeps its globally determined input value.
+
+After structural activation planning and target-once suppression,
+`BuildProgram.GetRequestOrder` checks the complete active set, including
+targets completed by earlier requests in the same executor. A request is
+rejected if both endpoints of any state conflict are active. This happens
+before any newly requested target body executes.
+
+Consequently, either target can be requested independently, but a request or
+persistent execution history containing both is illegal:
+
+```text
+request Reader         => accepted
+request Writer         => accepted
+request Writer; Reader => rejected
+request Reader; Writer => rejected
+```
+
+This validation does not relink or specialize dataflow for a request. The
+program contains one global value graph plus a global conflict relation.
+Requests only select legal executable slices of that fixed program.
+
+Ordered conflicting accesses do not create a request constraint. Their values
+are linked through the target DAG in the usual way. Conditional operations are
+currently treated conservatively: a possible read or write contributes to the
+target's access set even when its condition happens to be false for the
+current evaluation.
+
 ## Global precedence versus request order
 
 `BuildProgram` intentionally retains two different structures:
@@ -146,9 +196,11 @@ still satisfy every mandatory DAG predecessor.
 Consequently:
 
 - the executor requires no external sidecar, but the lowered `BuildProgram`
-  must retain both the DAG and ordered activation metadata;
+  must retain the DAG, ordered activation metadata, and state-conflict
+  constraints;
 - serializers and alternative executors must preserve and consume Prelude and
-  Epilogue order; target nodes plus global DAG edges are insufficient;
+  Epilogue order and request conflicts; target nodes plus global DAG edges are
+  insufficient;
 - incomparability in the global DAG does not authorize reordering or
   parallelizing targets from one request unless their request-specific order
   and observable effects are also proven irrelevant; and
@@ -197,7 +249,10 @@ For `n` targets and `m` target references:
 
 - immediate DAG construction is `O(n + m)`;
 - cycle detection is `O(n + m)`;
-- a request plan is linear in the structural work activated by that request;
+- state-conflict discovery currently compares unordered target pairs and is
+  quadratic in `n`, multiplied by their state-access counts;
+- a request plan is linear in the structural work activated by that request
+  plus the number of recorded state conflicts;
 - materializing every target's full predecessor set requires `O(n^2)` space in
   the worst case.
 

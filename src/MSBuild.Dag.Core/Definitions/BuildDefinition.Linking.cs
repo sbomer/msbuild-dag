@@ -26,7 +26,7 @@ public sealed partial class BuildDefinition
         var orderPredecessors = GetOrderPredecessors(dependencies);
 
         ValidateConditionalOutputs();
-        ValidateStateOrdering(orderPredecessors);
+        var stateConflicts = GetStateConflicts(orderPredecessors);
 
         var initialValues =
             new Dictionary<Location, Value>(
@@ -158,10 +158,18 @@ public sealed partial class BuildDefinition
                     ReferenceEqualityComparer.Instance));
         }
 
+        var linkedStateConflicts = stateConflicts
+            .Select(
+                conflict => new TargetStateConflict(
+                    linkedTargets[conflict.FirstTarget],
+                    linkedTargets[conflict.SecondTarget],
+                    conflict.Location))
+            .ToArray();
         var program = new BuildProgram(
             Targets.Select(target => linkedTargets[target]).ToArray(),
             initialContents,
             inputValues.Values.ToArray(),
+            linkedStateConflicts,
             linkedOrderPredecessors);
 
         return new BuildLinkResult(
@@ -287,10 +295,12 @@ public sealed partial class BuildDefinition
         }
     }
 
-    private void ValidateStateOrdering(
+    private IReadOnlyList<DefinitionStateConflict> GetStateConflicts(
         IReadOnlyDictionary<TargetDefinition, IReadOnlySet<TargetDefinition>>
             orderPredecessors)
     {
+        var result = new List<DefinitionStateConflict>();
+
         for (var firstIndex = 0; firstIndex < Targets.Count; firstIndex++)
         {
             var first = Targets[firstIndex];
@@ -307,6 +317,9 @@ public sealed partial class BuildDefinition
                     continue;
                 }
 
+                var conflictingLocations = new HashSet<Location>(
+                    ReferenceEqualityComparer.Instance);
+
                 foreach (var firstOutput in first.Outputs
                     .Where(output => output.Location is not null))
                 {
@@ -319,10 +332,7 @@ public sealed partial class BuildDefinition
                             output.Location,
                             firstOutput.Location)))
                     {
-                        throw new StateConflictException(
-                            first,
-                            second,
-                        firstOutput.Location!);
+                        conflictingLocations.Add(firstOutput.Location!);
                     }
                 }
 
@@ -334,14 +344,20 @@ public sealed partial class BuildDefinition
                             input.Location,
                             secondOutput.Location)))
                     {
-                        throw new StateConflictException(
-                            first,
-                            second,
-                        secondOutput.Location!);
+                        conflictingLocations.Add(secondOutput.Location!);
                     }
                 }
+
+                result.AddRange(
+                    conflictingLocations.Select(
+                        location => new DefinitionStateConflict(
+                            first,
+                            second,
+                            location)));
             }
         }
+
+        return result;
     }
 
     private Value GetReachingValue(
@@ -376,5 +392,10 @@ public sealed partial class BuildDefinition
             ? initialValue
             : throw new MissingTargetInputException(target, location);
     }
+
+    private sealed record DefinitionStateConflict(
+        TargetDefinition FirstTarget,
+        TargetDefinition SecondTarget,
+        Location Location);
 
 }

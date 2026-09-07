@@ -37,7 +37,8 @@ public sealed partial class BuildLinkResult
         }
 
         foreach (var linkedTarget in
-            Program.GetRequestOrder(Targets[requestedTarget]))
+            Program.GetRequestOrderForStateProjection(
+                Targets[requestedTarget]))
         {
             var target = definitionsByTarget[linkedTarget];
 

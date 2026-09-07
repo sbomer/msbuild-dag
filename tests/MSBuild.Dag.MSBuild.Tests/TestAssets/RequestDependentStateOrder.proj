@@ -1,0 +1,19 @@
+<Project>
+  <PropertyGroup>
+    <State>initial</State>
+  </PropertyGroup>
+
+  <Target Name="Writer"
+          BeforeTargets="Root">
+    <PropertyGroup>
+      <State>updated</State>
+    </PropertyGroup>
+  </Target>
+
+  <Target Name="Reader">
+    <Message Importance="High" Text="$(State)" />
+  </Target>
+
+  <Target Name="Root"
+          DependsOnTargets="Reader" />
+</Project>

@@ -32,5 +32,6 @@ export AfterMicrosoftNETSdkTargets="${AfterMicrosoftNETSdkTargets:-$runtime_over
 exec dotnet run \
   --project "$repo_root/src/MSBuild.Dag.Cli/MSBuild.Dag.Cli.csproj" \
   -- \
+  --no-render \
   "$toolset_project" \
   Execute

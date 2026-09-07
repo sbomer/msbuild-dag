@@ -1,6 +1,13 @@
 <Project>
   <Import Project="$(MSBuildDagRuntimeRoot)/src/tasks/Crossgen2Tasks/Microsoft.NET.CrossGen.targets" />
 
+  <PropertyGroup>
+    <CoreResGenDependsOn>
+      _CheckForInvalidConfigurationAndPlatform;
+      $(CoreResGenDependsOn)
+    </CoreResGenDependsOn>
+  </PropertyGroup>
+
   <Target Name="_HandleFileConflictsForPublish"
           Condition="'$(ErrorOnDuplicatePublishOutputFiles)' != 'false'">
     <CheckForDuplicateItemMetadata

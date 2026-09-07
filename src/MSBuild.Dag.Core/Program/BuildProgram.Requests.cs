@@ -4,7 +4,23 @@ public sealed partial class BuildProgram
 {
     public IReadOnlyList<Target> GetRequestOrder(
         Target requestedTarget,
-        IReadOnlySet<Target>? completedTargets = null)
+        IReadOnlySet<Target>? completedTargets = null) =>
+        GetRequestOrder(
+            requestedTarget,
+            completedTargets,
+            validateStateConflicts: true);
+
+    internal IReadOnlyList<Target> GetRequestOrderForStateProjection(
+        Target requestedTarget) =>
+        GetRequestOrder(
+            requestedTarget,
+            completedTargets: null,
+            validateStateConflicts: false);
+
+    private IReadOnlyList<Target> GetRequestOrder(
+        Target requestedTarget,
+        IReadOnlySet<Target>? completedTargets,
+        bool validateStateConflicts)
     {
         ArgumentNullException.ThrowIfNull(requestedTarget);
 
@@ -64,7 +80,18 @@ public sealed partial class BuildProgram
                 }
             }
             available.Add(target);
-            available.Add(target);
+        }
+
+        if (validateStateConflicts)
+        {
+            foreach (var conflict in StateConflicts)
+            {
+                if (available.Contains(conflict.FirstTarget) &&
+                    available.Contains(conflict.SecondTarget))
+                {
+                    throw new RequestStateConflictException(conflict);
+                }
+            }
         }
 
         return result.ToArray();

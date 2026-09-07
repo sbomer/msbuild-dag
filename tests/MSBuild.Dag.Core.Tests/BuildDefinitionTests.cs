@@ -148,7 +148,7 @@ public sealed class BuildDefinitionTests
     }
 
     [Fact]
-    public void RejectsUnorderedStateConflict()
+    public void RecordsUnorderedStateConflictWithoutChangingDataflow()
     {
         var location = new Location<string>();
         var writtenValue = new Value<string>();
@@ -171,20 +171,56 @@ public sealed class BuildDefinitionTests
                 new TestOperation([read.Value], []),
             ]),
             []);
+        var requested = new TargetDefinition(
+            [],
+            [],
+            [],
+            new OperationGraph([]),
+            []);
+        var linked = new BuildDefinition(
+            new EvaluationSnapshot(
+                new Dictionary<Location, object?>
+                {
+                    [location] = "initial",
+                }),
+            [],
+            [writer, reader, requested],
+            new Dictionary<TargetDefinition, IReadOnlyList<TargetDefinition>>
+            {
+                [writer] = [],
+                [reader] = [],
+                [requested] = [writer, reader],
+            },
+            new Dictionary<TargetDefinition, IReadOnlyList<TargetDefinition>>
+            {
+                [writer] = [],
+                [reader] = [],
+                [requested] = [],
+            },
+            new Dictionary<TargetDefinition, IReadOnlyList<TargetDefinition>>
+            {
+                [writer] = [],
+                [reader] = [],
+                [requested] = [writer, reader],
+            })
+            .Link();
+        var conflict = Assert.Single(linked.Program.StateConflicts);
 
-        var exception = Assert.Throws<StateConflictException>(
-            () => new BuildDefinition(
-                new EvaluationSnapshot(
-                    new Dictionary<Location, object?>
-                    {
-                        [location] = "initial",
-                    }),
-                [writer, reader])
-                .Link());
-
-        Assert.Same(writer, exception.FirstTarget);
-        Assert.Same(reader, exception.SecondTarget);
-        Assert.Same(location, exception.Location);
+        Assert.Same(linked.Targets[writer], conflict.FirstTarget);
+        Assert.Same(linked.Targets[reader], conflict.SecondTarget);
+        Assert.Same(location, conflict.Location);
+        Assert.Same(
+            linked.InitialValues[location],
+            Assert.Single(linked.Targets[reader].Inputs));
+        Assert.Equal(
+            [linked.Targets[writer]],
+            linked.Program.GetRequestOrder(linked.Targets[writer]));
+        Assert.Equal(
+            [linked.Targets[reader]],
+            linked.Program.GetRequestOrder(linked.Targets[reader]));
+        var exception = Assert.Throws<RequestStateConflictException>(
+            () => linked.Program.GetRequestOrder(linked.Targets[requested]));
+        Assert.Same(conflict, exception.Conflict);
     }
 
     [Fact]
